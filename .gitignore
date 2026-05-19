@@ -1,0 +1,32 @@
+# Sensitive source documents - NEVER commit
+*.pdf
+*.docx
+*.doc
+*.csv
+*.xlsx
+*.xls
+
+# Snowflake CLI / credentials
+*.snowsql/
+.snowflake/
+*.pem
+*.p8
+*.key
+config.toml
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+
+# OS / Editors
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local rendering artifacts
+*.html
+!diagrams/*.html

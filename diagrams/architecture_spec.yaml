@@ -1,0 +1,39 @@
+title: "BTN Compliance AI POC — Architecture"
+subtitle: "Multi-regulation gap analysis powered by Snowflake Cortex (claude-opus-4-7)"
+width: 1920
+height: 1080
+scale: 2
+theme: light
+columns:
+  - title: "Sources"
+    accent: snowflake
+    nodes:
+      - {icon: "snowflake:RA_File", label: "Privacy Regulation", sub: "UU PDP / GDPR PDF"}
+      - {icon: "snowflake:RA_File", label: "Internal Policies", sub: "Kebijakan Khusus / Juklak"}
+      - {icon: "snowflake:RA_File", label: "Regulator Rules", sub: "PBI / PADG / POJK"}
+      - {icon: "snowflake:RA_File_CSV", label: "Sample Tx Data", sub: "TLHIST · GoAML · RTGS"}
+  - title: "Ingestion & Stage"
+    accent: snowflake
+    nodes:
+      - {icon: "snowflake:RA_Stage", label: "DOCS_STAGE", sub: "Internal stage"}
+      - {icon: "snowflake:Document_AI", label: "PARSE_DOCUMENT", sub: "PDF & DOCX → text"}
+  - title: "AI Layer"
+    accent: snowflake
+    nodes:
+      - {icon: "snowflake:AI_Star", label: "Cortex AISQL", sub: "claude-opus-4-7"}
+      - {icon: "snowflake:Search", label: "Cortex Search", sub: "RAG over regulations"}
+      - {icon: "snowflake:RA_Function_Stored_Procedure", label: "SP_REFRESH_*", sub: "5 stored procedures"}
+  - title: "Storage"
+    accent: snowflake
+    nodes:
+      - {icon: "snowflake:RA_Snowflake_Database", label: "BTN_COMPLIANCE_AI_DEMO", sub: "4 schemas"}
+      - {icon: "snowflake:RA_Table", label: "REGULATIONS", sub: "71 rules · 3 sources"}
+      - {icon: "snowflake:RA_Table", label: "GAP_ANALYSIS_*", sub: "UC1·UC2·UC3·UC4"}
+  - title: "Consumption"
+    accent: snowflake
+    nodes:
+      - {icon: "snowflake:Streamlit_in_Snowflake", label: "Streamlit Dashboard", sub: "Sidebar menu · Refresh"}
+      - {icon: "snowflake:Industry_Banking", label: "Compliance Officer", sub: "Self-service insight"}
+      - {icon: "snowflake:User_1", label: "Auditor", sub: "Cross-rule validation"}
+edges: {auto: true}
+footer: "Powered by Snowflake AI Data Cloud · Bank BTN POC"
