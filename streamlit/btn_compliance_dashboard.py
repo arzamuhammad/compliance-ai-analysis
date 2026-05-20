@@ -546,9 +546,16 @@ if selected_menu == MENU_OPTIONS[5]:
 
     @st.cache_data(ttl=600)
     def list_databases():
-        df = run_query_nocache("SHOW DATABASES")
-        col = [c for c in df.columns if c.lower() == "name"][0]
-        return sorted(df[col].dropna().astype(str).tolist())
+        try:
+            df = run_query_nocache(
+                "SELECT DATABASE_NAME FROM SNOWFLAKE.INFORMATION_SCHEMA.DATABASES "
+                "ORDER BY DATABASE_NAME")
+            return df["DATABASE_NAME"].dropna().astype(str).tolist()
+        except Exception:
+            df = run_query_nocache("SHOW DATABASES")
+            cols = list(df.columns)
+            name_col = next((c for c in cols if str(c).strip('"').lower() == "name"), cols[1] if len(cols) > 1 else cols[0])
+            return sorted(df[name_col].dropna().astype(str).tolist())
 
     @st.cache_data(ttl=300)
     def list_schemas(db):
