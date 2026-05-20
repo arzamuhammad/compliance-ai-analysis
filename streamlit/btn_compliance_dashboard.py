@@ -107,6 +107,7 @@ MENU_OPTIONS = [
     "📋 3. UC2 - Kebijakan Khusus",
     "🏛️ 4. UC3 - Peraturan BI",
     "⚖️ 5. UC4 - Kebijakan VS BI",
+    "🔬 6. Adhoc Analytics",
 ]
 with st.sidebar:
     st.markdown("# 🏦 BTN")
@@ -529,6 +530,280 @@ if selected_menu == MENU_OPTIONS[4]:
             <b>Gap:</b> {r['GAP_FINDING']}<br>
             <b>Rekomendasi:</b> <span style='color:#555;'>{r['RECOMMENDATION']}</span></div>""",
             unsafe_allow_html=True)
+
+# ===================================================================
+# MENU 6: ADHOC ANALYTICS
+# ===================================================================
+if selected_menu == MENU_OPTIONS[5]:
+    section("🔬 Adhoc Compliance Analytics")
+    st.markdown("Pilih tabel mana saja di account ini, pilih regulasi, lalu jalankan analisis AI compliance secara on-the-fly dengan **Snowflake Cortex (claude-opus-4-7)**.")
+
+    REG_LABELS = {
+        "UU_PDP": "UU Perlindungan Data Pribadi",
+        "KEBIJAKAN_KHUSUS": "Kebijakan Khusus Perusahaan",
+        "BI_REGULATION": "Peraturan Bank Indonesia",
+    }
+
+    @st.cache_data(ttl=600)
+    def list_databases():
+        df = run_query_nocache("SHOW DATABASES")
+        col = [c for c in df.columns if c.lower() == "name"][0]
+        return sorted(df[col].dropna().astype(str).tolist())
+
+    @st.cache_data(ttl=300)
+    def list_schemas(db):
+        try:
+            df = run_query_nocache(
+                f'SELECT SCHEMA_NAME FROM "{db}".INFORMATION_SCHEMA.SCHEMATA '
+                f"WHERE SCHEMA_NAME NOT IN ('INFORMATION_SCHEMA') ORDER BY SCHEMA_NAME")
+            return df["SCHEMA_NAME"].tolist()
+        except Exception:
+            return []
+
+    @st.cache_data(ttl=300)
+    def list_tables(db, sch):
+        try:
+            df = run_query_nocache(
+                f'SELECT TABLE_NAME, TABLE_TYPE, ROW_COUNT FROM "{db}".INFORMATION_SCHEMA.TABLES '
+                f"WHERE TABLE_SCHEMA='{sch}' ORDER BY TABLE_NAME")
+            return df
+        except Exception:
+            return pd.DataFrame(columns=["TABLE_NAME","TABLE_TYPE","ROW_COUNT"])
+
+    @st.cache_data(ttl=300)
+    def get_columns(db, sch, tbl):
+        try:
+            df = run_query_nocache(
+                f'SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COMMENT '
+                f'FROM "{db}".INFORMATION_SCHEMA.COLUMNS '
+                f"WHERE TABLE_SCHEMA='{sch}' AND TABLE_NAME='{tbl}' ORDER BY ORDINAL_POSITION")
+            return df
+        except Exception:
+            return pd.DataFrame(columns=["COLUMN_NAME","DATA_TYPE","IS_NULLABLE","COMMENT"])
+
+    # ---- Step 1: Pick table ----
+    st.markdown("### Step 1 — Pilih Tabel")
+    cdb, csc, ctb = st.columns(3)
+    with cdb:
+        dbs = list_databases()
+        sel_db = st.selectbox("Database:", dbs,
+                              index=(dbs.index(DB) if DB in dbs else 0),
+                              key="adhoc_db")
+    with csc:
+        schemas = list_schemas(sel_db)
+        sel_sc = st.selectbox("Schema:", schemas, key="adhoc_sc") if schemas else None
+    with ctb:
+        df_tabs_adh = list_tables(sel_db, sel_sc) if sel_sc else pd.DataFrame()
+        if not df_tabs_adh.empty:
+            sel_tb = st.selectbox("Table:", df_tabs_adh["TABLE_NAME"].tolist(), key="adhoc_tb")
+        else:
+            sel_tb = None
+            st.info("Tidak ada tabel di schema ini.")
+
+    if not (sel_db and sel_sc and sel_tb):
+        st.stop()
+
+    fqn = f'"{sel_db}"."{sel_sc}"."{sel_tb}"'
+    df_cols_adh = get_columns(sel_db, sel_sc, sel_tb)
+
+    # Preview
+    a, b = st.columns([0.55, 0.45])
+    with a:
+        st.markdown(f"**Tabel terpilih:** `{fqn}`")
+        st.caption(f"{len(df_cols_adh)} kolom")
+        st.dataframe(df_cols_adh, use_container_width=True, hide_index=True, height=240)
+    with b:
+        try:
+            sample = run_query_nocache(f"SELECT * FROM {fqn} LIMIT 5")
+            st.markdown("**Sample 5 baris:**")
+            st.dataframe(sample, use_container_width=True, hide_index=True, height=240)
+        except Exception as e:
+            st.warning(f"Tidak bisa preview data: {e}")
+
+    # ---- Step 2: Pick regulation ----
+    st.markdown("### Step 2 — Pilih Regulasi")
+    sel_reg = st.radio("Regulation Source:",
+                       options=list(REG_LABELS.keys()),
+                       format_func=lambda x: f"{x} — {REG_LABELS[x]}",
+                       horizontal=True, key="adhoc_reg")
+    n_rules = int(df_regs[df_regs["REGULATION_SOURCE"] == sel_reg].shape[0])
+    st.caption(f"{n_rules} aturan akan diuji terhadap tabel ini.")
+
+    # ---- Step 3: Analyze ----
+    st.markdown("### Step 3 — Jalankan Analisis")
+    cb1, cb2, cb3 = st.columns([0.6, 0.2, 0.2])
+    with cb3:
+        run_now = st.button("🔬 Analisa Sekarang", key="adhoc_run", type="primary", use_container_width=True)
+
+    if not run_now:
+        st.info("Klik **Analisa Sekarang** untuk menjalankan AI gap analysis (claude-opus-4-7).")
+        st.stop()
+
+    # Build column descriptor
+    col_desc = "\n".join([
+        f"- {r['COLUMN_NAME']} ({r['DATA_TYPE']})" + (f" — {r['COMMENT']}" if r.get('COMMENT') else "")
+        for _, r in df_cols_adh.iterrows()
+    ])
+
+    # Pull rules for selected regulation
+    df_rules = df_regs[df_regs["REGULATION_SOURCE"] == sel_reg][
+        ["REG_ID","PASAL","CATEGORY","REGULATION_NAME","SEVERITY","CONTENT"]
+    ].copy()
+    rule_text = "\n".join([
+        f"[{r['REG_ID']}] Pasal {r['PASAL']} | {r['CATEGORY']} | Severity={r['SEVERITY']} | "
+        f"{r['REGULATION_NAME']}: {r['CONTENT']}"
+        for _, r in df_rules.iterrows()
+    ])
+
+    prompt = f"""You are a senior banking compliance auditor. Analyze the table schema below for compliance with the listed regulations.
+
+TABLE: {fqn}
+COLUMNS:
+{col_desc}
+
+REGULATIONS ({sel_reg} - {REG_LABELS[sel_reg]}):
+{rule_text}
+
+For every (column, rule) pair where there is a potential issue, return one finding object. Skip non-applicable pairs.
+Return ONLY a valid JSON array (no prose, no markdown fence) with this schema:
+[{{
+  "column_name": "<column>",
+  "reg_id": "<REG_ID from the list>",
+  "pasal": "<PASAL>",
+  "reg_category": "<CATEGORY>",
+  "regulation_title": "<REGULATION_NAME>",
+  "is_violation": true|false,
+  "severity": "CRITICAL|HIGH|MEDIUM|LOW",
+  "violation_type": "<short label, e.g. ENCRYPTION_MISSING, RETENTION_UNDEFINED>",
+  "finding": "<one sentence finding>",
+  "recommendation": "<one sentence concrete remediation>"
+}}]
+
+Be strict. Mark is_violation=true when the column likely violates the rule given typical bank schemas (e.g. plain-text PII, missing masking flags, no encryption hint, sensitive identifiers).
+"""
+
+    # Escape for SQL string
+    safe_prompt = prompt.replace("\\", "\\\\").replace("'", "''")
+
+    sql = f"""
+    SELECT TRY_PARSE_JSON(
+      REGEXP_REPLACE(
+        SNOWFLAKE.CORTEX.COMPLETE('claude-opus-4-7', '{safe_prompt}'),
+        '^```(?:json)?\\\\s*|\\\\s*```$', '', 1, 0, 'm'
+      )
+    ) AS RESULT
+    """
+
+    with st.spinner("⏳ Menjalankan AI gap analysis dengan claude-opus-4-7 …"):
+        try:
+            res = run_query_nocache(sql)
+        except Exception as e:
+            st.error(f"AI call gagal: {e}")
+            st.stop()
+
+    raw = res.iloc[0, 0]
+    if raw is None:
+        st.error("Model tidak mengembalikan JSON yang valid. Coba ulangi.")
+        st.stop()
+
+    import json
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        df_find = pd.DataFrame(data)
+    except Exception as e:
+        st.error(f"Gagal parse hasil AI: {e}")
+        st.code(str(raw)[:2000])
+        st.stop()
+
+    if df_find.empty:
+        st.success("🎉 AI tidak menemukan pelanggaran. Tabel ini compliant terhadap regulasi yang dipilih.")
+        st.stop()
+
+    # Normalize columns
+    df_find["IS_VIOLATION"]    = df_find.get("is_violation", True).astype(bool)
+    df_find["FINDING_SEVERITY"] = df_find.get("severity", "MEDIUM").astype(str).str.upper()
+    df_find["VIOLATION_TYPE"]   = df_find.get("violation_type", "")
+    df_find["FINDING"]          = df_find.get("finding", "")
+    df_find["RECOMMENDATION"]   = df_find.get("recommendation", "")
+    df_find["REG_ID"]           = df_find.get("reg_id", "")
+    df_find["PASAL"]            = df_find.get("pasal", "")
+    df_find["REG_CATEGORY"]     = df_find.get("reg_category", "")
+    df_find["REG_TITLE"]        = df_find.get("regulation_title", "")
+    df_find["COLUMN_NAME"]      = df_find.get("column_name", "")
+    df_find["TABLE_NAME"]       = sel_tb
+
+    n_total  = len(df_find)
+    df_v     = df_find[df_find["IS_VIOLATION"]]
+    n_viol   = len(df_v)
+    n_crit   = int((df_v["FINDING_SEVERITY"] == "CRITICAL").sum())
+    n_high   = int((df_v["FINDING_SEVERITY"] == "HIGH").sum())
+    n_med    = int((df_v["FINDING_SEVERITY"] == "MEDIUM").sum())
+    n_low    = int((df_v["FINDING_SEVERITY"] == "LOW").sum())
+    cols_aff = df_v["COLUMN_NAME"].nunique()
+    score    = (1 - n_viol / max(n_total, 1)) * 100
+
+    # KPIs
+    section(f"Hasil Analisis — `{fqn}` × {REG_LABELS[sel_reg]}")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1: kpi("Compliance Score", f"{score:.1f}%", "100% = full compliant", "blue")
+    with c2: kpi("Total Findings", n_total, "AI analysis pairs", "lightblue")
+    with c3: kpi("Violations", n_viol, f"{(n_viol/max(n_total,1)*100):.1f}%", "red")
+    with c4: kpi("Critical / High", f"{n_crit} / {n_high}", "perlu remediasi cepat", "red")
+    with c5: kpi("Kolom Terdampak", cols_aff, "unique columns", "gold")
+
+    # Tabs
+    t1, t2, t3, t4 = st.tabs(["📊 Overview", "🚨 Violations", "💡 Recommendations", "🧾 Raw"])
+
+    with t1:
+        if n_viol == 0:
+            st.success("Tidak ada pelanggaran terdeteksi.")
+        else:
+            a, b = st.columns(2)
+            with a:
+                st.altair_chart(severity_chart(df_v, "FINDING_SEVERITY",
+                                "Pelanggaran per Severity"), use_container_width=True)
+            with b:
+                vt = df_v.groupby("VIOLATION_TYPE").size().reset_index(name="N").sort_values("N")
+                chart = alt.Chart(vt).mark_bar(cornerRadius=4, color=BTN_GOLD).encode(
+                    x="N:Q", y=alt.Y("VIOLATION_TYPE:N", sort="-x"),
+                    tooltip=["VIOLATION_TYPE","N"]
+                ).properties(height=260, title="Pelanggaran per Tipe")
+                st.altair_chart(chart, use_container_width=True)
+            per_reg = df_v.groupby(["REG_ID","REG_TITLE","REG_CATEGORY"]).size().reset_index(name="VIOLATIONS").sort_values("VIOLATIONS", ascending=False)
+            st.markdown("**Pelanggaran per Regulasi:**")
+            st.dataframe(per_reg, use_container_width=True, hide_index=True)
+
+    with t2:
+        if n_viol == 0:
+            st.success("Tidak ada pelanggaran.")
+        else:
+            render_violations_table(df_v)
+
+    with t3:
+        if n_viol == 0:
+            st.success("Tidak ada rekomendasi.")
+        else:
+            sev_filter = st.multiselect("Filter Severity:",
+                                        ["CRITICAL","HIGH","MEDIUM","LOW"],
+                                        default=["CRITICAL","HIGH","MEDIUM","LOW"],
+                                        key="adhoc_sev")
+            df_r = df_v[df_v["FINDING_SEVERITY"].isin(sev_filter)]
+            for _, row in df_r.iterrows():
+                st.markdown(f"""<div class='recommendation-item'>
+                <span class='sev-{row['FINDING_SEVERITY']}'>● {row['FINDING_SEVERITY']}</span>
+                <b>[{row['REG_ID']}] {row['TABLE_NAME']}.{row['COLUMN_NAME']}</b> — {row['REG_TITLE']}<br>
+                <i>Pasal {row['PASAL']} • {row['REG_CATEGORY']} • Type: {row['VIOLATION_TYPE']}</i><br>
+                <b>Finding:</b> {row['FINDING']}<br>
+                <b>Recommendation:</b> <span style='color:#555;'>{row['RECOMMENDATION']}</span>
+                </div>""", unsafe_allow_html=True)
+
+    with t4:
+        st.dataframe(df_find, use_container_width=True, hide_index=True)
+        st.download_button("⬇️ Download CSV",
+                           df_find.to_csv(index=False).encode("utf-8"),
+                           file_name=f"adhoc_{sel_tb}_{sel_reg}.csv",
+                           mime="text/csv")
+
 
 # Footer
 st.markdown("---")
