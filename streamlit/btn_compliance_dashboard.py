@@ -693,12 +693,7 @@ Be strict. Mark is_violation=true when the column likely violates the rule given
     safe_prompt = prompt.replace("\\", "\\\\").replace("'", "''")
 
     sql = f"""
-    SELECT TRY_PARSE_JSON(
-      REGEXP_REPLACE(
-        SNOWFLAKE.CORTEX.COMPLETE('claude-opus-4-7', '{safe_prompt}'),
-        '^```(?:json)?\\\\s*|\\\\s*```$', '', 1, 0, 'm'
-      )
-    ) AS RESULT
+    SELECT SNOWFLAKE.CORTEX.COMPLETE('claude-opus-4-7', '{safe_prompt}') AS RESULT
     """
 
     with st.spinner("⏳ Menjalankan AI gap analysis dengan claude-opus-4-7 …"):
@@ -709,13 +704,22 @@ Be strict. Mark is_violation=true when the column likely violates the rule given
             st.stop()
 
     raw = res.iloc[0, 0]
-    if raw is None:
-        st.error("Model tidak mengembalikan JSON yang valid. Coba ulangi.")
+    if raw is None or str(raw).strip() == "":
+        st.error("Model tidak mengembalikan response. Coba ulangi.")
         st.stop()
 
-    import json
+    import json, re
+    txt = str(raw).strip()
+    # strip ```json ... ``` markdown fences if present
+    txt = re.sub(r"^```(?:json)?\s*", "", txt)
+    txt = re.sub(r"\s*```\s*$", "", txt)
+    # find first JSON array if model added prose
+    m = re.search(r"\[.*\]", txt, re.DOTALL)
+    if m:
+        txt = m.group(0)
+
     try:
-        data = json.loads(raw) if isinstance(raw, str) else raw
+        data = json.loads(txt)
         df_find = pd.DataFrame(data)
     except Exception as e:
         st.error(f"Gagal parse hasil AI: {e}")
