@@ -671,8 +671,7 @@ COLUMNS:
 REGULATIONS ({sel_reg} - {REG_LABELS[sel_reg]}):
 {rule_text}
 
-For every (column, rule) pair where there is a potential issue, return one finding object. Skip non-applicable pairs.
-Return ONLY a valid JSON array (no prose, no markdown fence) with this schema:
+Return ONLY a JSON array of the TOP 25 most material findings (no prose, no markdown fence) with this schema:
 [{{
   "column_name": "<column>",
   "reg_id": "<REG_ID from the list>",
@@ -682,18 +681,22 @@ Return ONLY a valid JSON array (no prose, no markdown fence) with this schema:
   "is_violation": true|false,
   "severity": "CRITICAL|HIGH|MEDIUM|LOW",
   "violation_type": "<short label, e.g. ENCRYPTION_MISSING, RETENTION_UNDEFINED>",
-  "finding": "<one sentence finding>",
-  "recommendation": "<one sentence concrete remediation>"
+  "finding": "<one sentence finding in plain English>",
+  "recommendation": "<one sentence concrete remediation action>"
 }}]
 
-Be strict. Mark is_violation=true when the column likely violates the rule given typical bank schemas (e.g. plain-text PII, missing masking flags, no encryption hint, sensitive identifiers).
+Be strict. Mark is_violation=true when the column likely violates the rule given typical bank schemas (plain-text PII, missing masking, no encryption hint, sensitive identifiers without retention). Keep each finding/recommendation under 30 words.
 """
 
     # Escape for SQL string
     safe_prompt = prompt.replace("\\", "\\\\").replace("'", "''")
 
     sql = f"""
-    SELECT SNOWFLAKE.CORTEX.COMPLETE('claude-opus-4-7', '{safe_prompt}') AS RESULT
+    SELECT SNOWFLAKE.CORTEX.COMPLETE(
+      'claude-opus-4-7',
+      ARRAY_CONSTRUCT(OBJECT_CONSTRUCT('role','user','content','{safe_prompt}')),
+      OBJECT_CONSTRUCT('max_tokens', 8000, 'temperature', 0)
+    ) AS RESULT
     """
 
     with st.spinner("⏳ Menjalankan AI gap analysis dengan claude-opus-4-7 …"):
@@ -710,7 +713,15 @@ Be strict. Mark is_violation=true when the column likely violates the rule given
 
     import json, re
     txt = str(raw).strip()
-    # strip ```json ... ``` markdown fences if present
+    # When using ARRAY_CONSTRUCT/OBJECT_CONSTRUCT form, response is a JSON object
+    try:
+        outer = json.loads(txt)
+        if isinstance(outer, dict) and "choices" in outer:
+            txt = outer["choices"][0].get("messages") or outer["choices"][0].get("message", {}).get("content", "")
+    except Exception:
+        pass
+    txt = str(txt).strip()
+    # strip ```json ... ``` fences if present
     txt = re.sub(r"^```(?:json)?\s*", "", txt)
     txt = re.sub(r"\s*```\s*$", "", txt)
     # find first JSON array if model added prose
@@ -742,9 +753,37 @@ Be strict. Mark is_violation=true when the column likely violates the rule given
     df_find["REG_TITLE"]        = df_find.get("regulation_title", "")
     df_find["COLUMN_NAME"]      = df_find.get("column_name", "")
     df_find["TABLE_NAME"]       = sel_tb
+    df_find["DATABASE_NAME"]    = sel_db
+    df_find["SCHEMA_NAME"]      = sel_sc
+    df_find["REG_SOURCE"]       = sel_reg
+    df_find["ANALYZED_AT"]      = pd.Timestamp.now()
+
+    # ---- Persist to temp table in Snowflake ----
+    persist_cols = ["DATABASE_NAME","SCHEMA_NAME","TABLE_NAME","COLUMN_NAME","REG_SOURCE",
+                    "REG_ID","PASAL","REG_CATEGORY","REG_TITLE","IS_VIOLATION",
+                    "FINDING_SEVERITY","VIOLATION_TYPE","FINDING","RECOMMENDATION","ANALYZED_AT"]
+    df_persist = df_find[persist_cols].copy()
+    try:
+        if USING_SNOWPARK:
+            session.sql(f"""CREATE TABLE IF NOT EXISTS {DB}.COMPLIANCE_RESULTS.ADHOC_FINDINGS (
+                DATABASE_NAME STRING, SCHEMA_NAME STRING, TABLE_NAME STRING, COLUMN_NAME STRING,
+                REG_SOURCE STRING, REG_ID STRING, PASAL STRING, REG_CATEGORY STRING, REG_TITLE STRING,
+                IS_VIOLATION BOOLEAN, FINDING_SEVERITY STRING, VIOLATION_TYPE STRING,
+                FINDING STRING, RECOMMENDATION STRING, ANALYZED_AT TIMESTAMP_NTZ)""").collect()
+            session.sql(f"DELETE FROM {DB}.COMPLIANCE_RESULTS.ADHOC_FINDINGS "
+                        f"WHERE DATABASE_NAME='{sel_db}' AND SCHEMA_NAME='{sel_sc}' "
+                        f"AND TABLE_NAME='{sel_tb}' AND REG_SOURCE='{sel_reg}'").collect()
+            session.write_pandas(df_persist, "ADHOC_FINDINGS",
+                                 database=DB, schema="COMPLIANCE_RESULTS", auto_create_table=False)
+            persisted = True
+        else:
+            persisted = False
+    except Exception as e:
+        st.caption(f"⚠️ Tidak bisa persist ke table (continuing): {e}")
+        persisted = False
 
     n_total  = len(df_find)
-    df_v     = df_find[df_find["IS_VIOLATION"]]
+    df_v     = df_find[df_find["IS_VIOLATION"]].copy()
     n_viol   = len(df_v)
     n_crit   = int((df_v["FINDING_SEVERITY"] == "CRITICAL").sum())
     n_high   = int((df_v["FINDING_SEVERITY"] == "HIGH").sum())
@@ -753,18 +792,50 @@ Be strict. Mark is_violation=true when the column likely violates the rule given
     cols_aff = df_v["COLUMN_NAME"].nunique()
     score    = (1 - n_viol / max(n_total, 1)) * 100
 
-    # KPIs
-    section(f"Hasil Analisis — `{fqn}` × {REG_LABELS[sel_reg]}")
+    # ----------- MANAGER VIEW -----------
+    if persisted:
+        st.success(f"✅ Analisis selesai. Hasil disimpan di `{DB}.COMPLIANCE_RESULTS.ADHOC_FINDINGS`.")
+
+    # Hero score banner
+    if score >= 80:
+        sc_color = "#1B9E4B"; sc_label = "GOOD"
+    elif score >= 50:
+        sc_color = BTN_GOLD; sc_label = "NEEDS ATTENTION"
+    else:
+        sc_color = BTN_RED; sc_label = "CRITICAL"
+
+    st.markdown(f"""
+    <div style='background:linear-gradient(90deg,{BTN_DARK_BLUE} 0%,{BTN_BLUE} 100%);
+                padding:24px 32px;border-radius:14px;color:white;margin:18px 0;'>
+      <div style='display:flex;justify-content:space-between;align-items:center;'>
+        <div>
+          <div style='font-size:13px;opacity:.85;letter-spacing:1px;'>COMPLIANCE SCORE — {REG_LABELS[sel_reg]}</div>
+          <div style='font-size:14px;opacity:.7;margin-top:2px;'>{fqn}</div>
+        </div>
+        <div style='text-align:right;'>
+          <div style='font-size:54px;font-weight:800;line-height:1;'>{score:.0f}<span style='font-size:24px;'>%</span></div>
+          <div style='background:{sc_color};display:inline-block;padding:4px 12px;border-radius:14px;
+                      font-size:12px;font-weight:700;margin-top:6px;'>{sc_label}</div>
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # KPI tiles
     c1, c2, c3, c4, c5 = st.columns(5)
-    with c1: kpi("Compliance Score", f"{score:.1f}%", "100% = full compliant", "blue")
-    with c2: kpi("Total Findings", n_total, "AI analysis pairs", "lightblue")
-    with c3: kpi("Violations", n_viol, f"{(n_viol/max(n_total,1)*100):.1f}%", "red")
-    with c4: kpi("Critical / High", f"{n_crit} / {n_high}", "perlu remediasi cepat", "red")
-    with c5: kpi("Kolom Terdampak", cols_aff, "unique columns", "gold")
+    with c1: kpi("Total Findings", n_total, "AI analysis", "blue")
+    with c2: kpi("Violations", n_viol, f"{(n_viol/max(n_total,1)*100):.0f}% dari total", "red")
+    with c3: kpi("Critical", n_crit, "remediasi segera", "red")
+    with c4: kpi("High", n_high, "prioritas tinggi", "gold")
+    with c5: kpi("Kolom Terdampak", cols_aff, "unique columns", "lightblue")
 
-    # Tabs
-    t1, t2, t3, t4 = st.tabs(["📊 Overview", "🚨 Violations", "💡 Recommendations", "🧾 Raw"])
+    # Tabs (manager-friendly, no raw JSON)
+    t1, t2, t3, t4 = st.tabs([
+        "📊 Executive Overview", "🚨 Violations Detail",
+        "💡 Recommended Actions", "📋 Findings Table",
+    ])
 
+    # ---- TAB 1: Executive Overview ----
     with t1:
         if n_viol == 0:
             st.success("Tidak ada pelanggaran terdeteksi.")
@@ -772,46 +843,99 @@ Be strict. Mark is_violation=true when the column likely violates the rule given
             a, b = st.columns(2)
             with a:
                 st.altair_chart(severity_chart(df_v, "FINDING_SEVERITY",
-                                "Pelanggaran per Severity"), use_container_width=True)
+                                "Distribusi Severity"), use_container_width=True)
             with b:
                 vt = df_v.groupby("VIOLATION_TYPE").size().reset_index(name="N").sort_values("N")
                 chart = alt.Chart(vt).mark_bar(cornerRadius=4, color=BTN_GOLD).encode(
                     x="N:Q", y=alt.Y("VIOLATION_TYPE:N", sort="-x"),
                     tooltip=["VIOLATION_TYPE","N"]
-                ).properties(height=260, title="Pelanggaran per Tipe")
+                ).properties(height=260, title="Tipe Pelanggaran")
                 st.altair_chart(chart, use_container_width=True)
-            per_reg = df_v.groupby(["REG_ID","REG_TITLE","REG_CATEGORY"]).size().reset_index(name="VIOLATIONS").sort_values("VIOLATIONS", ascending=False)
-            st.markdown("**Pelanggaran per Regulasi:**")
-            st.dataframe(per_reg, use_container_width=True, hide_index=True)
 
+            st.markdown("#### Pelanggaran per Regulasi")
+            per_reg = df_v.groupby(["REG_ID","REG_TITLE","REG_CATEGORY"]).agg(
+                VIOLATIONS=("IS_VIOLATION","size"),
+                CRITICAL=("FINDING_SEVERITY", lambda s: (s=="CRITICAL").sum()),
+                HIGH=("FINDING_SEVERITY", lambda s: (s=="HIGH").sum()),
+            ).reset_index().sort_values("VIOLATIONS", ascending=False)
+            st.dataframe(per_reg.rename(columns={
+                "REG_ID":"Reg ID","REG_TITLE":"Regulation","REG_CATEGORY":"Category",
+                "VIOLATIONS":"Total","CRITICAL":"Critical","HIGH":"High"}),
+                use_container_width=True, hide_index=True)
+
+    # ---- TAB 2: Violations Detail (severity-grouped cards) ----
     with t2:
         if n_viol == 0:
             st.success("Tidak ada pelanggaran.")
         else:
-            render_violations_table(df_v)
+            sev_palette = {"CRITICAL": BTN_RED, "HIGH": "#FF7A00", "MEDIUM": BTN_GOLD, "LOW": BTN_LIGHT_BLUE}
+            for sev in ["CRITICAL","HIGH","MEDIUM","LOW"]:
+                sub = df_v[df_v["FINDING_SEVERITY"] == sev]
+                if sub.empty: continue
+                st.markdown(
+                    f"<h4 style='color:{sev_palette[sev]};margin-top:18px;'>"
+                    f"● {sev} <span style='color:#666;font-weight:400;font-size:14px;'>"
+                    f"({len(sub)} findings)</span></h4>", unsafe_allow_html=True)
+                for _, row in sub.iterrows():
+                    st.markdown(f"""
+                    <div style='background:white;border-left:5px solid {sev_palette[sev]};
+                                padding:14px 18px;border-radius:8px;margin-bottom:10px;
+                                box-shadow:0 1px 4px rgba(0,0,0,0.06);'>
+                      <div style='display:flex;justify-content:space-between;align-items:flex-start;'>
+                        <div>
+                          <span style='background:{BTN_DARK_BLUE};color:white;padding:2px 8px;
+                                       border-radius:10px;font-size:11px;font-weight:700;'>{row['REG_ID']}</span>
+                          <span style='color:#888;font-size:12px;margin-left:6px;'>Pasal {row['PASAL']} • {row['REG_CATEGORY']}</span>
+                          <div style='font-weight:700;color:{BTN_DARK_BLUE};margin-top:4px;font-size:15px;'>
+                            {row['TABLE_NAME']}.<span style='color:{BTN_BLUE};'>{row['COLUMN_NAME']}</span>
+                          </div>
+                          <div style='color:#666;font-size:12px;font-style:italic;'>{row['REG_TITLE']}</div>
+                        </div>
+                        <span style='background:{sev_palette[sev]};color:white;padding:3px 10px;
+                                     border-radius:10px;font-size:11px;font-weight:700;'>{row['VIOLATION_TYPE']}</span>
+                      </div>
+                      <div style='margin-top:10px;color:#333;'><b>Finding:</b> {row['FINDING']}</div>
+                      <div style='margin-top:6px;color:#1B9E4B;'><b>✓ Recommendation:</b> {row['RECOMMENDATION']}</div>
+                    </div>""", unsafe_allow_html=True)
 
+    # ---- TAB 3: Recommended Actions ----
     with t3:
         if n_viol == 0:
             st.success("Tidak ada rekomendasi.")
         else:
-            sev_filter = st.multiselect("Filter Severity:",
-                                        ["CRITICAL","HIGH","MEDIUM","LOW"],
-                                        default=["CRITICAL","HIGH","MEDIUM","LOW"],
-                                        key="adhoc_sev")
-            df_r = df_v[df_v["FINDING_SEVERITY"].isin(sev_filter)]
-            for _, row in df_r.iterrows():
-                st.markdown(f"""<div class='recommendation-item'>
-                <span class='sev-{row['FINDING_SEVERITY']}'>● {row['FINDING_SEVERITY']}</span>
-                <b>[{row['REG_ID']}] {row['TABLE_NAME']}.{row['COLUMN_NAME']}</b> — {row['REG_TITLE']}<br>
-                <i>Pasal {row['PASAL']} • {row['REG_CATEGORY']} • Type: {row['VIOLATION_TYPE']}</i><br>
-                <b>Finding:</b> {row['FINDING']}<br>
-                <b>Recommendation:</b> <span style='color:#555;'>{row['RECOMMENDATION']}</span>
+            st.markdown("**Top Priority Actions** — disusun berdasarkan severity.")
+            ranked = df_v.copy()
+            sev_rank = {"CRITICAL":0,"HIGH":1,"MEDIUM":2,"LOW":3}
+            ranked["RNK"] = ranked["FINDING_SEVERITY"].map(sev_rank)
+            ranked = ranked.sort_values(["RNK","REG_ID"]).head(15)
+            for i, (_, row) in enumerate(ranked.iterrows(), 1):
+                sev_palette = {"CRITICAL": BTN_RED, "HIGH": "#FF7A00", "MEDIUM": BTN_GOLD, "LOW": BTN_LIGHT_BLUE}
+                clr = sev_palette.get(row["FINDING_SEVERITY"], BTN_BLUE)
+                st.markdown(f"""
+                <div style='background:white;padding:14px 18px;border-radius:8px;
+                            margin-bottom:8px;display:flex;align-items:flex-start;gap:14px;
+                            box-shadow:0 1px 4px rgba(0,0,0,0.06);'>
+                  <div style='background:{clr};color:white;font-weight:800;font-size:16px;
+                              width:34px;height:34px;border-radius:50%;display:flex;
+                              align-items:center;justify-content:center;flex-shrink:0;'>{i}</div>
+                  <div style='flex:1;'>
+                    <div style='font-weight:700;color:{BTN_DARK_BLUE};'>
+                      {row['TABLE_NAME']}.{row['COLUMN_NAME']}
+                      <span style='color:{clr};font-size:12px;margin-left:8px;'>● {row['FINDING_SEVERITY']}</span>
+                      <span style='color:#888;font-size:12px;'> • {row['REG_ID']}</span>
+                    </div>
+                    <div style='color:#333;margin-top:4px;'>{row['RECOMMENDATION']}</div>
+                  </div>
                 </div>""", unsafe_allow_html=True)
 
+    # ---- TAB 4: Findings Table ----
     with t4:
-        st.dataframe(df_find, use_container_width=True, hide_index=True)
+        st.markdown("Hasil lengkap (juga tersedia di table `COMPLIANCE_RESULTS.ADHOC_FINDINGS`).")
+        show_cols = ["TABLE_NAME","COLUMN_NAME","REG_ID","PASAL","REG_CATEGORY",
+                     "FINDING_SEVERITY","VIOLATION_TYPE","FINDING","RECOMMENDATION"]
+        st.dataframe(df_find[show_cols], use_container_width=True, hide_index=True, height=420)
         st.download_button("⬇️ Download CSV",
-                           df_find.to_csv(index=False).encode("utf-8"),
+                           df_find[show_cols].to_csv(index=False).encode("utf-8"),
                            file_name=f"adhoc_{sel_tb}_{sel_reg}.csv",
                            mime="text/csv")
 
