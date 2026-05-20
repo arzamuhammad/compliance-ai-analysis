@@ -1,0 +1,217 @@
+footer: "Compliance AI Analysis POC | Confidential"
+slides:
+  - type: cover
+    title: "COMPLIANCE AI ANALYSIS"
+    subtitle: "Multi-Regulation Gap Analysis with Snowflake Cortex"
+    author: "POC Deliverable | 2026"
+
+  - type: agenda
+    title: "AGENDA"
+    items:
+      - Background & Problem Statement
+      - POC Objectives
+      - How Snowflake Solves It
+      - Solution Architecture
+      - Step-by-Step Implementation
+      - Application Walkthrough
+      - Conclusion & Next Steps
+
+  - type: section
+    title: "THE CHALLENGE"
+
+  - type: content
+    title: "Background: Compliance Is a Manual, Costly Burden"
+    bullets:
+      - "Banks must comply with multiple, overlapping regulations: privacy laws (UU PDP / GDPR), regulator circulars (PBI / PADG / POJK), and internal policies"
+      - "Each regulation is hundreds of pages of unstructured PDF / DOCX text"
+      - "Compliance teams manually map every rule to dozens of source tables and hundreds of columns"
+      - "Cycle time to answer 'are we compliant?' = weeks to months per audit"
+      - "Internal policies often drift from external regulations, creating hidden gaps"
+      - "Result: high audit risk, regulatory fines, and reputational damage"
+
+  - type: highlight
+    title: "The Hidden Cost"
+    headline: "70%"
+    subhead: "of compliance effort is spent on document reading and manual rule mapping  —  not on actual remediation."
+    bullets:
+      - "3+ regulation sources to cross-check (privacy law · regulator · internal policy)"
+      - "100+ tables and columns to classify per audit"
+      - "Manual gap analysis cannot keep up with new regulator circulars"
+
+  - type: section
+    title: "POC OBJECTIVES"
+
+  - type: content
+    title: "What This POC Aims to Prove"
+    bullets:
+      - "Automate parsing of regulatory PDFs and internal policy DOCX files"
+      - "Use AI to classify every column for PII / financial / risk attributes"
+      - "Run gap analysis across 4 use cases on demand, not once a quarter"
+      - "Detect cross-coverage gaps between internal policy and regulator rules"
+      - "Deliver insights to compliance officers via a self-service dashboard"
+      - "Build everything natively in Snowflake — no data movement, no extra ML stack"
+
+  - type: four_column
+    title: "Four Use Cases Covered"
+    columns:
+      - title: "UC1 — Privacy"
+        bullets:
+          - "PII columns vs privacy regulation"
+          - "Encryption · masking · retention · consent"
+      - title: "UC2 — Internal Policy"
+        bullets:
+          - "Transactions vs internal bank policy"
+          - "Operational controls validation"
+      - title: "UC3 — Regulator"
+        bullets:
+          - "Transactions vs regulator circulars"
+          - "PBI / PADG / POJK compliance"
+      - title: "UC4 — Cross-check"
+        bullets:
+          - "Internal policy vs regulator"
+          - "Find coverage gaps & duplications"
+
+  - type: section
+    title: "THE SOLUTION"
+
+  - type: content
+    title: "Why Snowflake — Built-In AI for Compliance"
+    bullets:
+      - "Cortex AISQL with claude-opus-4-7 — large-context reasoning over rule text"
+      - "PARSE_DOCUMENT — native PDF & DOCX text extraction, no third-party OCR"
+      - "Cortex Search — RAG over regulation text for citation-grade answers"
+      - "Stored Procedures — make every step idempotent and re-runnable"
+      - "Streamlit-in-Snowflake — embedded UI, no separate web app to host"
+      - "Horizon governance — RBAC, masking and tagging on the same platform"
+      - "Zero data movement — all processing happens where the data lives"
+
+  - type: three_column
+    title: "Snowflake Features Used"
+    columns:
+      - title: "Document AI"
+        bullets:
+          - "PARSE_DOCUMENT (PDF + DOCX)"
+          - "LAYOUT mode preserves structure"
+          - "Native to the warehouse"
+      - title: "Cortex AISQL"
+        bullets:
+          - "claude-opus-4-7 model"
+          - "Column classification at scale"
+          - "JSON-structured rule reasoning"
+      - title: "Cortex Search"
+        bullets:
+          - "RAG over regulation chunks"
+          - "Citation tracking for auditors"
+          - "Hybrid keyword + semantic"
+
+  - type: stat
+    title: "What Cortex Delivers"
+    stats:
+      - {value: "146", label: "Columns classified by AI"}
+      - {value: "71", label: "Regulation rules indexed"}
+      - {value: "4", label: "Gap-analysis use cases"}
+      - {value: "1", label: "Click to refresh end-to-end"}
+
+  - type: architecture
+    title: "Solution Architecture"
+    image: "/Users/mardiyan/Documents/Snowflake/Project/Yureny/BTN/POC/compliance-ai-analysis/diagrams/architecture.png"
+    components:
+      - {title: "Sources", desc: "Privacy regulation PDFs, internal policy DOCX, regulator circulars, sample transaction CSVs."}
+      - {title: "Stage & Parse", desc: "Internal stage stores raw documents; PARSE_DOCUMENT extracts text from PDF + DOCX in one call."}
+      - {title: "AI Layer", desc: "Cortex AISQL (claude-opus-4-7) classifies columns and runs gap analysis. Cortex Search powers RAG."}
+      - {title: "Storage", desc: "One database, four schemas (Customer, Transaction, Docs, Results) holding inputs and AI outputs."}
+      - {title: "Stored Procedures", desc: "Five idempotent SPs (classification + UC1 / UC2 / UC3 / UC4) called by the dashboard's refresh button."}
+      - {title: "Streamlit Dashboard", desc: "Sidebar menu, five tabs per use case, executive summary, refresh-on-demand."}
+
+  - type: section
+    title: "IMPLEMENTATION"
+
+  - type: process
+    title: "Step-by-Step Build"
+    steps:
+      - "Create database, warehouse, schemas, and source tables (synthetic data)"
+      - "Upload regulation PDFs / DOCX to an internal Snowflake stage"
+      - "Parse documents to text with SNOWFLAKE.CORTEX.PARSE_DOCUMENT"
+      - "Seed REGULATIONS table with rule rows tagged by source"
+      - "Run AI column classification (PII / risk / masking flags)"
+      - "Run gap analysis for UC1-UC4 with claude-opus-4-7"
+      - "Wrap each step in a Stored Procedure for refresh-on-demand"
+      - "Deploy Streamlit dashboard for self-service compliance insight"
+
+  - type: two_column
+    title: "Refresh Pattern — Always Current Compliance"
+    columns:
+      - title: "Without SPs"
+        bullets:
+          - "Analyst reruns scripts manually"
+          - "No traceable lineage"
+          - "Risk of partial / inconsistent results"
+      - title: "With SP_REFRESH_*"
+        bullets:
+          - "One click recomputes results"
+          - "Idempotent — safe to rerun"
+          - "Triggered from dashboard or scheduled task"
+
+  - type: section
+    title: "WHAT IT LOOKS LIKE"
+
+  - type: content
+    title: "Streamlit Dashboard — Sidebar Menu"
+    bullets:
+      - "Sidebar navigation with 5 menu options: Summary · UC1 · UC2 · UC3 · UC4"
+      - "Brand-themed colors and logo"
+      - "Refresh button per use case calls the matching stored procedure live"
+      - "Built entirely with Streamlit-in-Snowflake — no external hosting"
+
+  - type: content
+    title: "Per Use Case — Five Tabs of Insight"
+    bullets:
+      - "Overview — KPIs and risk counts (Compliant / Gap / Partial)"
+      - "Rule Coverage — every rule mapped to its compliance status"
+      - "Column Heatmap — AI-classified columns with risk severity"
+      - "Action Plan — AI-generated remediation steps, prioritized"
+      - "Raw Findings — full audit trail with reasoning text from claude-opus-4-7"
+
+  - type: highlight
+    title: "From Months to Minutes"
+    headline: "<5 min"
+    subhead: "to refresh the entire 4-use-case compliance posture against new data or new rules."
+    bullets:
+      - "No data movement, no batch ETL"
+      - "Auditor-ready evidence with AI reasoning preserved"
+      - "Re-runnable as regulations evolve"
+
+  - type: section
+    title: "CONCLUSION"
+
+  - type: content
+    title: "Conclusion — Compliance as a Continuous Capability"
+    bullets:
+      - "Snowflake Cortex turned a multi-week manual review into a one-click refresh"
+      - "Four use cases (privacy · internal · regulator · cross-coverage) covered end-to-end on a single platform"
+      - "PARSE_DOCUMENT + claude-opus-4-7 removed the need for external OCR or LLM stacks"
+      - "Stored procedures + Streamlit-in-Snowflake make compliance self-service for officers"
+      - "Pattern is reusable across other regulations (PCI-DSS, ISO 27001, SOX) and other industries"
+
+  - type: three_column
+    title: "Recommended Next Steps"
+    columns:
+      - title: "Productionize"
+        bullets:
+          - "Schedule SP refresh via Tasks"
+          - "Add row access policies"
+          - "Plug into Horizon catalog"
+      - title: "Expand Coverage"
+        bullets:
+          - "Onboard more regulations"
+          - "Cover credit, AML, KYC domains"
+          - "Add a Cortex Agent for chat"
+      - title: "Operationalize"
+        bullets:
+          - "Wire alerts to compliance team"
+          - "Track gap closure over time"
+          - "Audit-ready evidence export"
+
+  - type: thankyou
+    title: "THANK YOU"
+    subtitle: "Questions & Discussion"
