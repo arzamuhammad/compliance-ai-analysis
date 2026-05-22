@@ -1,4 +1,127 @@
 -- =============================================================================
+-- 05_refresh_stored_procedures.sql
+-- STEP 6: PRODUCTION REFRESH PIPELINE — Idempotent Stored Procedures
+-- =============================================================================
+--
+-- FUNGSI / TUJUAN:
+--   Ini adalah versi PRODUCTION dari pipeline AI compliance. Sementara
+--   script 03 & 04 adalah skrip manual one-shot untuk men-setup demo,
+--   script 05 membungkus seluruh logika AI (klasifikasi + gap analysis)
+--   ke dalam STORED PROCEDURES idempotent yang bisa dipanggil
+--   berulang-ulang dari:
+--     1. Tombol "🔄 Refresh" di dashboard Streamlit
+--     2. Snowflake TASK terjadwal (scheduling otomatis)
+--     3. Eksternal orchestrator (Airflow, dbt, dst.)
+--
+--   Bedanya dengan 03 & 04:
+--     - 03/04 = SETUP & DEMO awal, dijalankan satu kali
+--     - 05    = OPERASIONAL berkelanjutan, dijalankan kapanpun ada
+--               regulasi baru, schema berubah, atau policy baru dipasang.
+--   Hasil 03/04 dan hasil 05 SAMA-SAMA tabel COMPLIANCE_RESULTS, tapi 05
+--   memisahkan hasil per use case agar dashboard bisa refresh per UC.
+--
+-- INPUT:
+--   - Tabel hasil script 01 (CUSTOMER_DATA + TRANSACTION_DATA)
+--   - Tabel REGULATIONS hasil script 02 (dengan kolom
+--     REGULATION_SOURCE bernilai UU_PDP / KEBIJAKAN_KHUSUS /
+--     BI_REGULATION)
+--   - Placeholder <DB> harus diganti nama database aktual
+--     (mis. BTN_COMPLIANCE_AI_DEMO) sebelum dijalankan
+--
+-- ISI / 4 STORED PROCEDURES:
+--
+--   1. SP_REFRESH_AI_CLASSIFICATION()
+--      Re-klasifikasi SEMUA kolom in-scope (CUSTOMER_DATA +
+--      TRANSACTION_DATA) menggunakan claude-opus-4-7. Fungsi sama
+--      seperti script 03, tapi dipanggil setiap kali ada perubahan
+--      schema. Output: tabel AI_CLASSIFICATION (overwrite).
+--
+--   2. SP_REFRESH_UC1()
+--      ► Use Case 1: PII vs UU PDP / Privacy Regulation
+--      Hanya men-scan kolom CONTAINS_PII = TRUE di CUSTOMER_DATA, lalu
+--      mem-vonis terhadap pasal-pasal UU PDP. Pakai pre-filter (CROSS
+--      JOIN dgn predicate kategori) supaya jumlah LLM call efisien.
+--      Output: GAP_ANALYSIS_UC1.
+--
+--   3. SP_REFRESH_TX_GAP(REG_SOURCE)
+--      ► Use Case 2 & 3: Transaksi vs Internal Policy / Regulator BI
+--      Satu prosedur parametrik untuk dua UC sekaligus:
+--          CALL SP_REFRESH_TX_GAP('KEBIJAKAN_KHUSUS')  → UC2
+--          CALL SP_REFRESH_TX_GAP('BI_REGULATION')     → UC3
+--      Hanya scan TRANSACTION_DATA, dan filter pasangan kolom×pasal
+--      berdasarkan kategori (KYC_AML, FRAUD_PREVENTION,
+--      SETTLEMENT_RISK, FOREIGN_EXCHANGE, AUDIT_TRAIL, dst).
+--      Output: GAP_ANALYSIS_TRANSACTIONS (di-DELETE per REG_SOURCE
+--      sebelum INSERT, jadi idempotent per source).
+--
+--   4. SP_REFRESH_UC4()
+--      ► Use Case 4: Cross-Compare — Internal Policy vs Regulator BI
+--      Setiap pasal BI di-cross check terhadap RINGKASAN seluruh
+--      Kebijakan Khusus internal. AI menentukan apakah pasal BI
+--      sudah TERCAKUP (FULL/PARTIAL/NONE) di kebijakan internal.
+--      Output: GAP_ANALYSIS_UC4 dengan flag COVERED_IN_KEBIJAKAN +
+--      coverage_quality + rekomendasi tambah/revisi pasal.
+--
+-- OUTPUT (tabel hasil refresh):
+--   - COMPLIANCE_RESULTS.AI_CLASSIFICATION
+--   - COMPLIANCE_RESULTS.GAP_ANALYSIS_UC1
+--   - COMPLIANCE_RESULTS.GAP_ANALYSIS_TRANSACTIONS
+--     (UC2 + UC3, dipisah per REGULATION_SOURCE)
+--   - COMPLIANCE_RESULTS.GAP_ANALYSIS_UC4
+--
+--   Setiap baris hasil sudah berisi: IS_VIOLATION, FINDING (Bahasa
+--   Indonesia), RECOMMENDATION, ANALYZED_AT — siap render di dashboard.
+--
+-- DEPENDENCY:
+--   - Script 01 + 02 sudah dijalankan
+--   - Tabel REGULATIONS sudah punya kolom REGULATION_SOURCE
+--   - Cortex enabled (claude-opus-4-7 atau fallback claude-4-sonnet)
+--   - Role pemanggil punya privilege:
+--       USAGE on SNOWFLAKE.CORTEX
+--       SELECT on tabel CUSTOMER_DATA.* + TRANSACTION_DATA.*
+--       OWNERSHIP/MODIFY on COMPLIANCE_RESULTS.*
+--
+-- POSISI DI PIPELINE:
+--   01_data_setup → 02_parse_documents → 03_ai_classification →
+--   04_gap_analysis → [05_refresh_stored_procedures] → Streamlit
+--
+-- HUBUNGAN DENGAN SCRIPT LAIN:
+--   - Script 03 = versi MANUAL untuk klasifikasi (one-shot demo)
+--     Script 05 SP_REFRESH_AI_CLASSIFICATION = versi PROCEDURAL
+--     (idempotent, bisa di-call berulang)
+--   - Script 04 = versi MANUAL untuk gap analysis (1 tabel hasil)
+--     Script 05 SP_REFRESH_UC1/UC2/UC3/UC4 = versi PROCEDURAL yang
+--     dipisah per use case (4 tabel hasil) supaya dashboard bisa
+--     refresh per UC tanpa rerun semuanya.
+--   - Tombol "🔄 Refresh" di Streamlit (btn_compliance_dashboard.py)
+--     memanggil prosedur-prosedur di sini.
+--
+-- KARAKTERISTIK PRODUCTION:
+--   - IDEMPOTENT: aman dipanggil berulang. CREATE OR REPLACE TABLE atau
+--     DELETE+INSERT mencegah duplikasi.
+--   - JSON-FENCE-SAFE: pakai REGEXP_REPLACE menghapus ```json ... ```
+--     sebelum TRY_PARSE_JSON, supaya tidak crash kalau LLM membungkus
+--     output dengan markdown fence.
+--   - PARAMETRIC: SP_REFRESH_TX_GAP menerima REG_SOURCE → satu prosedur
+--     melayani UC2 dan UC3.
+--   - COST-OPTIMIZED: pre-filter kategori (DATA_MASKING vs PII, KYC_AML
+--     vs sensitive, dst.) supaya tidak semua kolom × semua pasal
+--     dijalankan ke LLM.
+--
+-- CARA PEMAKAIAN:
+--   USE DATABASE BTN_COMPLIANCE_AI_DEMO;
+--   CALL COMPLIANCE_RESULTS.SP_REFRESH_AI_CLASSIFICATION();
+--   CALL COMPLIANCE_RESULTS.SP_REFRESH_UC1();
+--   CALL COMPLIANCE_RESULTS.SP_REFRESH_TX_GAP('KEBIJAKAN_KHUSUS');
+--   CALL COMPLIANCE_RESULTS.SP_REFRESH_TX_GAP('BI_REGULATION');
+--   CALL COMPLIANCE_RESULTS.SP_REFRESH_UC4();
+--
+-- CATATAN:
+--   - Sebelum CREATE PROCEDURE, ganti placeholder <DB> dan <WH> dengan
+--     nilai aktual (mis. BTN_COMPLIANCE_AI_DEMO + BTN_POC).
+--   - Untuk schedule otomatis, bungkus 5 CALL di atas dengan
+--     CREATE TASK ... SCHEDULE = 'USING CRON ...'.
+-- =============================================================================
 -- Phase 2 v2 - Stored Procedures for Compliance Refresh (claude-opus-4-7)
 -- =============================================================================
 -- These SPs are called by the dashboard's "🔄 Refresh" buttons. Replace

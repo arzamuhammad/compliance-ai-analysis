@@ -1,4 +1,90 @@
 -- ============================================================================
+-- 01_data_setup.sql
+-- STEP 1: PONDASI / FOUNDATION — Skema database, tabel, & seed schema
+-- ============================================================================
+--
+-- FUNGSI / TUJUAN:
+--   Mendirikan "panggung" untuk seluruh pipeline compliance AI. Script ini
+--   membuat semua tabel target yang nantinya akan di-AUDIT. Tanpa script
+--   ini, tidak ada data sama sekali untuk diklasifikasi (script 03)
+--   atau diaudit terhadap regulasi (script 04 / 05).
+--
+--   Filosofi: tabel-tabel di sini sengaja dibuat MIRIP dengan core
+--   banking schema BTN (NASABAH, REKENING, KARTU_KREDIT,
+--   LOAN_APPLICATION, TLHIST_TRANSAKSI, GOAML_ODM_TRANSAKSI,
+--   RTGS_SKNBI_PAYMENT) supaya hasil AI klasifikasi & gap analysis
+--   relevan dengan dunia nyata bank Indonesia (UU PDP, KYC/AML, BI-RTGS,
+--   SKNBI).
+--
+-- INPUT:
+--   - Tidak ada (script ini adalah titik awal pipeline)
+--   - Optional: data CSV bisa di-load setelah tabel dibuat
+--
+-- ISI / KONTEN UTAMA:
+--   A. CUSTOMER_DATA schema (target UC1 — UU PDP / Privacy)
+--        * NASABAH           — master nasabah (NIK, NAMA, EMAIL, NPWP,
+--                              ALAMAT, TANGGAL_LAHIR, NAMA_IBU_KANDUNG,
+--                              PENDAPATAN_BULANAN, dll.) → kaya akan PII
+--        * REKENING          — saldo, no rekening, tipe rekening
+--        * KARTU_KREDIT      — NOMOR_KARTU, CVV, CREDIT_LIMIT
+--                              (CVV sengaja ada untuk uji deteksi
+--                              violation PCI-DSS / UU PDP)
+--        * LOAN_APPLICATION  — pengajuan pinjaman + data penjamin
+--
+--   B. TRANSACTION_DATA schema (target UC2 & UC3 — internal policy &
+--      regulator BI/OJK)
+--        * TLHIST_TRANSAKSI    — core transaction history (debit/credit,
+--                                channel ATM/MB/IB/Teller, IP, device)
+--        * GOAML_ODM_TRANSAKSI — format pelaporan AML / goAML
+--                                (untuk uji KYC, cross-border, SWIFT)
+--        * RTGS_SKNBI_PAYMENT  — pembayaran lewat BI-RTGS / SKNBI
+--                                (untuk uji settlement & operational risk)
+--
+-- KENAPA STRUKTUR INI?
+--   Setiap kolom dipilih DENGAN NIAT supaya bisa mendemo violation:
+--     - Field PII jelas (NIK, NPWP, NAMA_IBU_KANDUNG) → akan di-VIOLATION
+--       oleh script 04/05 jika belum dipasang masking policy
+--     - CVV di KARTU_KREDIT → akan ditandai CRITICAL (PCI-DSS / UU PDP
+--       melarang penyimpanan CVV)
+--     - KYC_VERIFIED & AML_SCREENING di RTGS_SKNBI_PAYMENT (Y/N) → bisa
+--       sengaja diisi 'N' untuk men-trigger AML violation finding
+--     - Cross-border fields (CCY, XRATE, SWIFT_LAWAN, CNTRY_CODE) →
+--       relevan dengan regulasi BI tentang devisa & SWIFT
+--
+-- OUTPUT (objek yang dibuat):
+--   - 4 tabel di schema CUSTOMER_DATA
+--   - 3 tabel di schema TRANSACTION_DATA
+--   - (Sintetis 10K rows / tabel transaksi di-load lewat GENERATOR
+--     atau CSV PUT — lihat README "Step 1")
+--
+-- DEPENDENCY:
+--   - Database BTN_COMPLIANCE_AI_DEMO sudah ada
+--   - Schema CUSTOMER_DATA & TRANSACTION_DATA sudah ada
+--   - Warehouse BTN_POC tersedia
+--   - Role ACCOUNTADMIN (atau equivalent: CREATE TABLE privilege)
+--
+-- POSISI DI PIPELINE:
+--   [01_data_setup] → 02_parse_documents → 03_ai_classification →
+--   04_gap_analysis → 05_refresh_stored_procedures
+--
+-- HUBUNGAN DENGAN SCRIPT LAIN:
+--   - Script 03 akan men-SCAN INFORMATION_SCHEMA atas tabel-tabel di
+--     sini, lalu LLM akan memberi label PII / Financial / Sensitive
+--     berdasarkan nama tabel + nama kolom + tipe data.
+--   - Script 04 / 05 akan mengambil hasil label tersebut + isi pasal
+--     regulasi (dari script 02), lalu memvonis kolom mana yang
+--     compliant vs violation.
+--   - Tabel di sini juga merupakan SUMBER VALUE-LEVEL AUDIT (script
+--     03 tahap B) — AI sample 5 baris dari kolom CRITICAL/HIGH untuk
+--     tahu apakah datanya plain-text atau hashed.
+--
+-- CATATAN PENTING:
+--   - Tidak ada data nasabah ASLI di sini. Data sintetis di-generate
+--     pakai TABLE(GENERATOR(...)) + UNIFORM (lihat README).
+--   - Aman untuk di-recreate (semua statement pakai
+--     CREATE OR REPLACE TABLE). Tapi awas: kalau script 03 / 04 sudah
+--     pernah dijalankan, hasilnya jadi stale dan perlu di-refresh ulang.
+-- ============================================================================
 -- BTN Compliance AI POC - 01: Customer + Transaction tables with synthetic data
 -- ============================================================================
 USE ROLE ACCOUNTADMIN;

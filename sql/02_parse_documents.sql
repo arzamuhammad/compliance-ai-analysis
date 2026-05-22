@@ -1,4 +1,96 @@
 -- ============================================================================
+-- 02_parse_documents.sql
+-- STEP 2: REGULASI (PDF/DOCX) → TEKS TERSTRUKTUR (tabel REGULATIONS)
+-- ============================================================================
+--
+-- FUNGSI / TUJUAN:
+--   Mengubah dokumen regulasi mentah (PDF / DOCX) menjadi data
+--   TERSTRUKTUR yang bisa dibaca AI di tahap berikutnya. Script ini
+--   menjawab pertanyaan: "Bagaimana caranya supaya AI bisa MEMBACA
+--   pasal-pasal di dokumen UU PDP / Peraturan BI / kebijakan internal?"
+--
+--   Output utamanya adalah tabel COMPLIANCE_DOCS.REGULATIONS — satu
+--   baris per pasal — yang nantinya dipakai oleh script 04 / 05 sebagai
+--   "buku peraturan" untuk auditor AI.
+--
+-- INPUT:
+--   - File PDF / DOCX di internal stage @PDF_STAGE (atau DOCS_STAGE)
+--     Contoh:
+--       * Peraturan_Perlindungan_Data_Perbankan.pdf  (UU PDP)
+--       * Peraturan_BI_No_6-8-PBI-2004.pdf, PADG_082024.pdf
+--       * Bank_ABC_SKNBI_Kebijakan_Khusus_2022.docx
+--       * Juklak_BI-RTGS_Revisi.docx
+--   - Stage dengan ENCRYPTION = SNOWFLAKE_SSE & DIRECTORY = ENABLED
+--
+-- PROSES (3 langkah berurutan):
+--   1. PARSE_DOCUMENT
+--        SNOWFLAKE.CORTEX.PARSE_DOCUMENT(@stage, 'file.pdf',
+--                                        {'mode': 'LAYOUT'})
+--        → membaca PDF/DOCX dan mengekstrak teks mentah (raw content)
+--        → output JSON dengan field :content
+--
+--   2. CORTEX.COMPLETE (LLM Extraction)
+--        Cortex LLM (claude-4-sonnet) menerima teks raw lalu MEMECAH
+--        dokumen menjadi pasal-pasal terstruktur dalam format JSON
+--        array dengan field:
+--          - reg_id            : ID unik (REG-001, REG-002, ...)
+--          - regulation_name   : nama UU / peraturan
+--          - pasal             : nomor pasal / section
+--          - category          : DATA_MASKING / ACCESS_CONTROL /
+--                                ENCRYPTION / AUDIT_TRAIL /
+--                                DATA_RETENTION / NETWORK_SECURITY /
+--                                KYC_AML / dll.
+--          - title             : judul singkat
+--          - severity          : CRITICAL / HIGH / MEDIUM
+--          - content           : isi paragraf lengkap pasal
+--
+--   3. LATERAL FLATTEN
+--        Pecah JSON array → satu baris per pasal → INSERT ke tabel
+--        COMPLIANCE_DOCS.REGULATIONS
+--
+-- OUTPUT:
+--   - COMPLIANCE_DOCS.REGULATIONS                   (tabel utama, ~12
+--                                                    pasal UU PDP, dst.)
+--   - COMPLIANCE_DOCS.SP_EXTRACT_REGULATIONS_FROM_PDF (versi reusable
+--                                                    sebagai stored
+--                                                    procedure)
+--   - COMPLIANCE_DOCS.REGULATION_SEARCH             (Cortex Search
+--                                                    Service untuk RAG
+--                                                    semantic search
+--                                                    atas pasal-pasal)
+--
+-- DEPENDENCY:
+--   - Database COMPLIANCE_AI_DEMO sudah dibuat
+--   - Schema COMPLIANCE_DOCS sudah dibuat
+--   - Stage PDF_STAGE / DOCS_STAGE sudah dibuat & file sudah di-PUT
+--   - Warehouse GEN2_SMALL untuk eksekusi Cortex
+--   - Cortex enabled di region akun (claude-4-sonnet tersedia)
+--
+-- POSISI DI PIPELINE:
+--   01_data_setup → [02_parse_documents] → 03_ai_classification →
+--   04_gap_analysis → 05_refresh_stored_procedures
+--
+-- HUBUNGAN DENGAN SCRIPT LAIN:
+--   - Output script ini (REGULATIONS.CONTENT) dibaca oleh AI di
+--     script 04 / 05. Itu sebabnya script 04 disebut "Full AI-Driven":
+--     AI BENAR-BENAR MEMBACA isi pasal hasil parsing di sini, BUKAN
+--     hardcoded mapping.
+--   - Cortex Search Service di akhir script ini juga bisa dipakai
+--     oleh dashboard Streamlit / Cortex Agent untuk fitur tanya-jawab
+--     regulasi (RAG).
+--
+-- CATATAN PENTING:
+--   - PDF dengan layout kompleks (tabel, multi-kolom) ditangani lebih
+--     baik dengan mode 'LAYOUT'. Untuk dokumen text-heavy biasa, mode
+--     'OCR' juga tersedia.
+--   - DOCX harus di-PUT dengan AUTO_COMPRESS=FALSE supaya
+--     PARSE_DOCUMENT bisa membacanya.
+--   - Untuk multi-source compliance (UU PDP + Kebijakan Khusus + BI),
+--     versi production di script 05 menambahkan kolom REGULATION_SOURCE
+--     ke tabel REGULATIONS untuk membedakan dari mana asal pasal.
+--   - Kalau PDF besar (>200 halaman), pertimbangkan untuk chunk dulu
+--     supaya tidak melebihi context window LLM.
+-- ============================================================================
 -- STEP 1: SET CONTEXT
 -- ============================================================================
 USE ROLE ACCOUNTADMIN;
