@@ -1,5 +1,5 @@
 """
-BTN Compliance AI Dashboard v2
+ABC Compliance AI Dashboard v2
 Sidebar menu + multi-tab per UC + refresh button (claude-opus-4-7)
 """
 import streamlit as st
@@ -8,51 +8,51 @@ import altair as alt
 import time
 
 # -------------------------------------------------------------------
-st.set_page_config(page_title="BTN Compliance AI", page_icon="🏦",
+st.set_page_config(page_title="ABC Compliance AI", page_icon="🏦",
                    layout="wide", initial_sidebar_state="expanded")
 
-BTN_LIGHT_BLUE = "#5BA3D9"
-BTN_BLUE       = "#0072BC"
-BTN_DARK_BLUE  = "#003D7C"
-BTN_RED        = "#E32726"
-BTN_GOLD       = "#F2A900"
-BTN_BG         = "#F5FAFE"
+ABC_LIGHT_BLUE = "#5BA3D9"
+ABC_BLUE       = "#0072BC"
+ABC_DARK_BLUE  = "#003D7C"
+ABC_RED        = "#E32726"
+ABC_GOLD       = "#F2A900"
+ABC_BG         = "#F5FAFE"
 
 st.markdown(f"""
 <style>
-.main {{ background-color: {BTN_BG}; }}
+.main {{ background-color: {ABC_BG}; }}
 [data-testid="stSidebar"] {{
-    background: linear-gradient(180deg, {BTN_LIGHT_BLUE} 0%, {BTN_BLUE} 100%);
+    background: linear-gradient(180deg, {ABC_LIGHT_BLUE} 0%, {ABC_BLUE} 100%);
 }}
 [data-testid="stSidebar"] * {{ color: white !important; }}
 .kpi-card {{
-    background: white; border-left: 6px solid {BTN_BLUE};
+    background: white; border-left: 6px solid {ABC_BLUE};
     padding: 16px 18px; border-radius: 10px;
     box-shadow: 0 2px 6px rgba(0,0,0,0.08); margin-bottom: 8px;
 }}
-.kpi-card.red {{ border-left-color: {BTN_RED}; }}
-.kpi-card.gold {{ border-left-color: {BTN_GOLD}; }}
-.kpi-card.lightblue {{ border-left-color: {BTN_LIGHT_BLUE}; }}
+.kpi-card.red {{ border-left-color: {ABC_RED}; }}
+.kpi-card.gold {{ border-left-color: {ABC_GOLD}; }}
+.kpi-card.lightblue {{ border-left-color: {ABC_LIGHT_BLUE}; }}
 .kpi-label {{ font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }}
-.kpi-value {{ font-size: 26px; font-weight: 800; color: {BTN_DARK_BLUE}; margin: 4px 0; }}
+.kpi-value {{ font-size: 26px; font-weight: 800; color: {ABC_DARK_BLUE}; margin: 4px 0; }}
 .kpi-sub  {{ font-size: 11px; color: #888; }}
 .section-title {{
-    color: {BTN_DARK_BLUE}; font-weight: 800; font-size: 20px;
-    border-bottom: 3px solid {BTN_BLUE}; padding-bottom: 6px; margin: 18px 0 12px 0;
+    color: {ABC_DARK_BLUE}; font-weight: 800; font-size: 20px;
+    border-bottom: 3px solid {ABC_BLUE}; padding-bottom: 6px; margin: 18px 0 12px 0;
 }}
-.sev-CRITICAL {{ color:{BTN_RED}; font-weight:700; }}
+.sev-CRITICAL {{ color:{ABC_RED}; font-weight:700; }}
 .sev-HIGH     {{ color:#FF7A00; font-weight:700; }}
-.sev-MEDIUM   {{ color:{BTN_GOLD}; font-weight:700; }}
-.sev-LOW      {{ color:{BTN_LIGHT_BLUE}; font-weight:700; }}
+.sev-MEDIUM   {{ color:{ABC_GOLD}; font-weight:700; }}
+.sev-LOW      {{ color:{ABC_LIGHT_BLUE}; font-weight:700; }}
 .findings-block {{
     background: white; padding: 14px 18px; border-radius: 10px;
     margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    border-left: 4px solid {BTN_BLUE};
+    border-left: 4px solid {ABC_BLUE};
 }}
 .recommendation-item {{
     background: white; padding: 12px 16px; border-radius: 8px;
     margin-bottom: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    border-left: 3px solid {BTN_GOLD};
+    border-left: 3px solid {ABC_GOLD};
 }}
 [data-testid="stSidebar"] [role="radiogroup"] label {{
     background: rgba(255,255,255,0.12); padding: 10px 14px; border-radius: 8px;
@@ -61,14 +61,14 @@ st.markdown(f"""
 }}
 [data-testid="stSidebar"] [role="radiogroup"] label:hover {{ background: rgba(255,255,255,0.25); }}
 [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {{
-    background: white !important; border-left: 4px solid {BTN_RED};
+    background: white !important; border-left: 4px solid {ABC_RED};
 }}
-[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) * {{ color: {BTN_DARK_BLUE} !important; }}
+[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) * {{ color: {ABC_DARK_BLUE} !important; }}
 .stTabs [data-baseweb="tab-list"] button[aria-selected="true"] {{
-    color: {BTN_DARK_BLUE}; border-bottom: 3px solid {BTN_RED};
+    color: {ABC_DARK_BLUE}; border-bottom: 3px solid {ABC_RED};
 }}
 button[kind="primary"] {{
-    background: {BTN_RED} !important; border: none !important;
+    background: {ABC_RED} !important; border: none !important;
     font-weight: 700 !important;
 }}
 </style>
@@ -110,7 +110,7 @@ MENU_OPTIONS = [
     "🔬 6. Adhoc Analytics",
 ]
 with st.sidebar:
-    st.markdown("# 🏦 BTN")
+    st.markdown("# 🏦 ABC")
     st.markdown("### Compliance AI")
     st.markdown("Bank Tabungan Negara")
     st.markdown("---")
@@ -124,10 +124,10 @@ with st.sidebar:
 # Header
 ch1, ch2 = st.columns([0.8, 0.2])
 with ch1:
-    st.markdown(f"<h1 style='color:{BTN_DARK_BLUE};margin-bottom:4px;'>🛡️ BTN Compliance AI Dashboard</h1>", unsafe_allow_html=True)
+    st.markdown(f"<h1 style='color:{ABC_DARK_BLUE};margin-bottom:4px;'>🛡️ ABC Compliance AI Dashboard</h1>", unsafe_allow_html=True)
     st.markdown(f"<p style='color:#444;font-size:14px;'>Otomasi compliance analytics via Snowflake Cortex Claude Opus 4.7.</p>", unsafe_allow_html=True)
 with ch2:
-    st.markdown(f"<div style='text-align:right;'><span style='background:{BTN_RED};color:white;padding:6px 14px;border-radius:20px;font-weight:700;'>POC v2.0</span></div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='text-align:right;'><span style='background:{ABC_RED};color:white;padding:6px 14px;border-radius:20px;font-weight:700;'>POC v2.0</span></div>", unsafe_allow_html=True)
 
 # -------------------------------------------------------------------
 # Data
@@ -194,7 +194,7 @@ def severity_chart(df, col_name, title):
         x=alt.X(f"{col_name}:N", sort=sev_order, title="Severity"),
         y=alt.Y("N:Q", title="Count"),
         color=alt.Color(f"{col_name}:N",
-            scale=alt.Scale(domain=sev_order, range=[BTN_RED,"#FF7A00",BTN_GOLD,BTN_LIGHT_BLUE]), legend=None),
+            scale=alt.Scale(domain=sev_order, range=[ABC_RED,"#FF7A00",ABC_GOLD,ABC_LIGHT_BLUE]), legend=None),
         tooltip=[col_name,"N"]
     ).properties(height=240, title=title)
 
@@ -250,12 +250,12 @@ if selected_menu == MENU_OPTIONS[0]:
             x=alt.X("N:Q"), y=alt.Y("LABEL:N", sort="-x", title=""),
             color=alt.Color("REGULATION_SOURCE:N", scale=alt.Scale(
                 domain=["UU_PDP","KEBIJAKAN_KHUSUS","BI_REGULATION"],
-                range=[BTN_LIGHT_BLUE, BTN_GOLD, BTN_RED]), legend=None),
+                range=[ABC_LIGHT_BLUE, ABC_GOLD, ABC_RED]), legend=None),
             tooltip=["LABEL","N"]).properties(height=180)
         st.altair_chart(chart, use_container_width=True)
     with b:
         cat = df_regs.groupby("CATEGORY").size().reset_index(name="N").sort_values("N", ascending=False).head(8)
-        chart2 = alt.Chart(cat).mark_bar(cornerRadius=4, color=BTN_BLUE).encode(
+        chart2 = alt.Chart(cat).mark_bar(cornerRadius=4, color=ABC_BLUE).encode(
             x="N:Q", y=alt.Y("CATEGORY:N", sort="-x")).properties(height=180)
         st.altair_chart(chart2, use_container_width=True)
 
@@ -319,21 +319,21 @@ def render_uc_tabs(df_full, uc_title, uc_subtitle, refresh_label, sp_call,
                 st.altair_chart(severity_chart(df_v, "FINDING_SEVERITY", "Pelanggaran per Severity"), use_container_width=True)
             with b:
                 bt = df_v.groupby("TABLE_NAME").size().reset_index(name="N").sort_values("N")
-                chart = alt.Chart(bt).mark_bar(cornerRadius=4, color=BTN_BLUE).encode(
+                chart = alt.Chart(bt).mark_bar(cornerRadius=4, color=ABC_BLUE).encode(
                     x="N:Q", y=alt.Y("TABLE_NAME:N", sort="-x"),
                     tooltip=["TABLE_NAME","N"]).properties(height=240, title="Pelanggaran per Tabel")
                 st.altair_chart(chart, use_container_width=True)
             a,b = st.columns(2)
             with a:
                 vt = df_v.groupby("VIOLATION_TYPE").size().reset_index(name="N").sort_values("N")
-                chart = alt.Chart(vt).mark_bar(cornerRadius=4, color=BTN_GOLD).encode(
+                chart = alt.Chart(vt).mark_bar(cornerRadius=4, color=ABC_GOLD).encode(
                     x="N:Q", y=alt.Y("VIOLATION_TYPE:N", sort="-x"),
                     tooltip=["VIOLATION_TYPE","N"]).properties(height=260, title="Pelanggaran per Tipe")
                 st.altair_chart(chart, use_container_width=True)
             with b:
                 if "REG_CATEGORY" in df_v.columns:
                     cat = df_v.groupby("REG_CATEGORY").size().reset_index(name="N").sort_values("N")
-                    chart = alt.Chart(cat).mark_bar(cornerRadius=4, color=BTN_LIGHT_BLUE).encode(
+                    chart = alt.Chart(cat).mark_bar(cornerRadius=4, color=ABC_LIGHT_BLUE).encode(
                         x="N:Q", y=alt.Y("REG_CATEGORY:N", sort="-x"),
                         tooltip=["REG_CATEGORY","N"]).properties(height=260, title="Pelanggaran per Kategori Regulasi")
                     st.altair_chart(chart, use_container_width=True)
@@ -409,7 +409,7 @@ def render_uc_tabs(df_full, uc_title, uc_subtitle, refresh_label, sp_call,
         a,b = st.columns(2)
         with a:
             cd = d_show.groupby("AI_CLASSIFICATION").size().reset_index(name="N")
-            chart = alt.Chart(cd).mark_bar(color=BTN_BLUE, cornerRadius=4).encode(
+            chart = alt.Chart(cd).mark_bar(color=ABC_BLUE, cornerRadius=4).encode(
                 x=alt.X("AI_CLASSIFICATION:N", title="Classification"),
                 y=alt.Y("N:Q", title="Count")).properties(height=300, title="Classification Distribution")
             st.altair_chart(chart, use_container_width=True)
@@ -446,7 +446,7 @@ if selected_menu == MENU_OPTIONS[1]:
         "UC1", "BTN_COMPLIANCE_AI_DEMO.COMPLIANCE_RESULTS.SP_REFRESH_UC1()",
         tables_in_scope=["NASABAH","REKENING","KARTU_KREDIT","LOAN_APPLICATION"],
     )
-    section("Pelanggaran per Cabang BTN")
+    section("Pelanggaran per Cabang Bank ABC")
     cabang_q = run_query(f"""
       WITH base AS (
         SELECT 'NASABAH' T, CABANG, COUNT(*) C FROM {DB}.CUSTOMER_DATA.NASABAH GROUP BY CABANG
@@ -456,7 +456,7 @@ if selected_menu == MENU_OPTIONS[1]:
       ) SELECT CABANG, SUM(C) AS RECORDS FROM base GROUP BY CABANG ORDER BY RECORDS DESC""")
     n_v_cols = df_uc1[df_uc1["IS_VIOLATION"]][["TABLE_NAME","COLUMN_NAME"]].drop_duplicates().shape[0]
     cabang_q["EST_AFFECTED_FIELDS"] = cabang_q["RECORDS"] * n_v_cols
-    chart = alt.Chart(cabang_q).mark_bar(color=BTN_BLUE, cornerRadius=4).encode(
+    chart = alt.Chart(cabang_q).mark_bar(color=ABC_BLUE, cornerRadius=4).encode(
         x="EST_AFFECTED_FIELDS:Q", y=alt.Y("CABANG:N", sort="-x"),
         tooltip=["CABANG","RECORDS","EST_AFFECTED_FIELDS"]
     ).properties(height=300, title="Estimasi Field Sensitif Belum Sesuai per Cabang (records × kolom-violation)")
@@ -469,7 +469,7 @@ if selected_menu == MENU_OPTIONS[2]:
     render_uc_tabs(
         df_uc2,
         "📋 Use Case 2: Kebijakan Khusus Perusahaan vs Data Transaksi",
-        "AI memeriksa apakah 3 tabel transaksi sudah comply dengan Kebijakan Khusus Bank BTN (SKNBI 2022 + Juklak BI-RTGS).",
+        "AI memeriksa apakah 3 tabel transaksi sudah comply dengan Kebijakan Khusus Bank ABC (SKNBI 2022 + Juklak BI-RTGS).",
         "UC2", "BTN_COMPLIANCE_AI_DEMO.COMPLIANCE_RESULTS.SP_REFRESH_TX_GAP('KEBIJAKAN_KHUSUS')",
         tables_in_scope=["TLHIST_TRANSAKSI","GOAML_ODM_TRANSAKSI","RTGS_SKNBI_PAYMENT"],
     )
@@ -491,7 +491,7 @@ if selected_menu == MENU_OPTIONS[3]:
 # ===================================================================
 if selected_menu == MENU_OPTIONS[4]:
     section("⚖️ Use Case 4: Kebijakan Khusus vs Peraturan Bank Indonesia")
-    st.markdown("Audit AI mengevaluasi apakah Kebijakan Khusus Bank BTN sudah mencakup seluruh aturan Bank Indonesia.")
+    st.markdown("Audit AI mengevaluasi apakah Kebijakan Khusus Bank ABC sudah mencakup seluruh aturan Bank Indonesia.")
     render_refresh_button("UC4", "BTN_COMPLIANCE_AI_DEMO.COMPLIANCE_RESULTS.SP_REFRESH_UC4()")
     st.caption("💡 Klik **Refresh UC4** untuk re-run analisis cross-coverage dengan claude-opus-4-7.")
 
@@ -515,12 +515,12 @@ if selected_menu == MENU_OPTIONS[4]:
             cov = pd.DataFrame({"Coverage":["FULL","PARTIAL","NONE"], "N":[n_full, n_partial, n_none]})
             chart = alt.Chart(cov).mark_arc(innerRadius=60).encode(
                 theta="N:Q", color=alt.Color("Coverage:N", scale=alt.Scale(
-                    domain=["FULL","PARTIAL","NONE"], range=[BTN_LIGHT_BLUE, BTN_GOLD, BTN_RED])),
+                    domain=["FULL","PARTIAL","NONE"], range=[ABC_LIGHT_BLUE, ABC_GOLD, ABC_RED])),
                 tooltip=["Coverage","N"]).properties(height=280, title="Coverage Kebijakan Khusus terhadap BI")
             st.altair_chart(chart, use_container_width=True)
         with b:
             gap = df_uc4[df_uc4["COVERAGE_QUALITY"]!="FULL"].groupby("BI_CATEGORY").size().reset_index(name="N").sort_values("N")
-            chart = alt.Chart(gap).mark_bar(color=BTN_RED, cornerRadius=4).encode(
+            chart = alt.Chart(gap).mark_bar(color=ABC_RED, cornerRadius=4).encode(
                 x="N:Q", y=alt.Y("BI_CATEGORY:N", sort="-x")).properties(height=280, title="Gap per Kategori Aturan BI")
             st.altair_chart(chart, use_container_width=True)
 
@@ -809,12 +809,12 @@ Be strict. Mark is_violation=true when the column likely violates the rule given
     if score >= 80:
         sc_color = "#1B9E4B"; sc_label = "GOOD"
     elif score >= 50:
-        sc_color = BTN_GOLD; sc_label = "NEEDS ATTENTION"
+        sc_color = ABC_GOLD; sc_label = "NEEDS ATTENTION"
     else:
-        sc_color = BTN_RED; sc_label = "CRITICAL"
+        sc_color = ABC_RED; sc_label = "CRITICAL"
 
     st.markdown(f"""
-    <div style='background:linear-gradient(90deg,{BTN_DARK_BLUE} 0%,{BTN_BLUE} 100%);
+    <div style='background:linear-gradient(90deg,{ABC_DARK_BLUE} 0%,{ABC_BLUE} 100%);
                 padding:24px 32px;border-radius:14px;color:white;margin:18px 0;'>
       <div style='display:flex;justify-content:space-between;align-items:center;'>
         <div>
@@ -855,7 +855,7 @@ Be strict. Mark is_violation=true when the column likely violates the rule given
                                 "Distribusi Severity"), use_container_width=True)
             with b:
                 vt = df_v.groupby("VIOLATION_TYPE").size().reset_index(name="N").sort_values("N")
-                chart = alt.Chart(vt).mark_bar(cornerRadius=4, color=BTN_GOLD).encode(
+                chart = alt.Chart(vt).mark_bar(cornerRadius=4, color=ABC_GOLD).encode(
                     x="N:Q", y=alt.Y("VIOLATION_TYPE:N", sort="-x"),
                     tooltip=["VIOLATION_TYPE","N"]
                 ).properties(height=260, title="Tipe Pelanggaran")
@@ -877,7 +877,7 @@ Be strict. Mark is_violation=true when the column likely violates the rule given
         if n_viol == 0:
             st.success("Tidak ada pelanggaran.")
         else:
-            sev_palette = {"CRITICAL": BTN_RED, "HIGH": "#FF7A00", "MEDIUM": BTN_GOLD, "LOW": BTN_LIGHT_BLUE}
+            sev_palette = {"CRITICAL": ABC_RED, "HIGH": "#FF7A00", "MEDIUM": ABC_GOLD, "LOW": ABC_LIGHT_BLUE}
             for sev in ["CRITICAL","HIGH","MEDIUM","LOW"]:
                 sub = df_v[df_v["FINDING_SEVERITY"] == sev]
                 if sub.empty: continue
@@ -892,11 +892,11 @@ Be strict. Mark is_violation=true when the column likely violates the rule given
                                 box-shadow:0 1px 4px rgba(0,0,0,0.06);'>
                       <div style='display:flex;justify-content:space-between;align-items:flex-start;'>
                         <div>
-                          <span style='background:{BTN_DARK_BLUE};color:white;padding:2px 8px;
+                          <span style='background:{ABC_DARK_BLUE};color:white;padding:2px 8px;
                                        border-radius:10px;font-size:11px;font-weight:700;'>{row['REG_ID']}</span>
                           <span style='color:#888;font-size:12px;margin-left:6px;'>Pasal {row['PASAL']} • {row['REG_CATEGORY']}</span>
-                          <div style='font-weight:700;color:{BTN_DARK_BLUE};margin-top:4px;font-size:15px;'>
-                            {row['TABLE_NAME']}.<span style='color:{BTN_BLUE};'>{row['COLUMN_NAME']}</span>
+                          <div style='font-weight:700;color:{ABC_DARK_BLUE};margin-top:4px;font-size:15px;'>
+                            {row['TABLE_NAME']}.<span style='color:{ABC_BLUE};'>{row['COLUMN_NAME']}</span>
                           </div>
                           <div style='color:#666;font-size:12px;font-style:italic;'>{row['REG_TITLE']}</div>
                         </div>
@@ -918,8 +918,8 @@ Be strict. Mark is_violation=true when the column likely violates the rule given
             ranked["RNK"] = ranked["FINDING_SEVERITY"].map(sev_rank)
             ranked = ranked.sort_values(["RNK","REG_ID"]).head(15)
             for i, (_, row) in enumerate(ranked.iterrows(), 1):
-                sev_palette = {"CRITICAL": BTN_RED, "HIGH": "#FF7A00", "MEDIUM": BTN_GOLD, "LOW": BTN_LIGHT_BLUE}
-                clr = sev_palette.get(row["FINDING_SEVERITY"], BTN_BLUE)
+                sev_palette = {"CRITICAL": ABC_RED, "HIGH": "#FF7A00", "MEDIUM": ABC_GOLD, "LOW": ABC_LIGHT_BLUE}
+                clr = sev_palette.get(row["FINDING_SEVERITY"], ABC_BLUE)
                 st.markdown(f"""
                 <div style='background:white;padding:14px 18px;border-radius:8px;
                             margin-bottom:8px;display:flex;align-items:flex-start;gap:14px;
@@ -928,7 +928,7 @@ Be strict. Mark is_violation=true when the column likely violates the rule given
                               width:34px;height:34px;border-radius:50%;display:flex;
                               align-items:center;justify-content:center;flex-shrink:0;'>{i}</div>
                   <div style='flex:1;'>
-                    <div style='font-weight:700;color:{BTN_DARK_BLUE};'>
+                    <div style='font-weight:700;color:{ABC_DARK_BLUE};'>
                       {row['TABLE_NAME']}.{row['COLUMN_NAME']}
                       <span style='color:{clr};font-size:12px;margin-left:8px;'>● {row['FINDING_SEVERITY']}</span>
                       <span style='color:#888;font-size:12px;'> • {row['REG_ID']}</span>
@@ -951,4 +951,4 @@ Be strict. Mark is_violation=true when the column likely violates the rule given
 
 # Footer
 st.markdown("---")
-st.markdown(f"<p style='text-align:center;color:#888;font-size:12px;'>BTN Compliance AI POC v2.0 • Snowflake Cortex (claude-opus-4-7) • {pd.Timestamp.now().strftime('%Y-%m-%d')}</p>", unsafe_allow_html=True)
+st.markdown(f"<p style='text-align:center;color:#888;font-size:12px;'>ABC Compliance AI POC v2.0 • Snowflake Cortex (claude-opus-4-7) • {pd.Timestamp.now().strftime('%Y-%m-%d')}</p>", unsafe_allow_html=True)
