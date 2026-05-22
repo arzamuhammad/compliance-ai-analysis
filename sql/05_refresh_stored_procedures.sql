@@ -368,10 +368,182 @@ END;
 $$;
 
 -- -----------------------------------------------------------------------------
+-- SP_REFRESH_DATA_COMPLETENESS — actual NULL/empty audit per regulation
+-- -----------------------------------------------------------------------------
+-- Beberapa pasal regulasi (mis. Juklak BI-RTGS Pasal 13) mewajibkan kolom
+-- tertentu TERISI (non-null, non-empty) untuk setiap baris transaksi.
+-- SP ini:
+--   1. Filter regulasi yang mengandung keyword kelengkapan (wajib memuat,
+--      paling kurang memuat, identitas lengkap, validasi atas perintah, dll.)
+--   2. Untuk setiap (pasal × tabel transaksi), Cortex LLM mengidentifikasi
+--      kolom mana yang WAJIB terisi sesuai pasal.
+--   3. Untuk setiap kolom required, jalankan COUNT NULL/empty AKTUAL via
+--      dynamic SQL terhadap data sintetis.
+--   4. Insert finding ke GAP_ANALYSIS_TRANSACTIONS dengan
+--      VIOLATION_TYPE='DATA_INCOMPLETE' lengkap dengan persentase null.
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE PROCEDURE COMPLIANCE_RESULTS.SP_REFRESH_DATA_COMPLETENESS()
+RETURNS STRING LANGUAGE SQL EXECUTE AS CALLER AS
+$$
+DECLARE
+  cnt_sql STRING;
+  inserted_rows INTEGER;
+BEGIN
+  -- Hapus finding completeness lama (re-runnable)
+  DELETE FROM COMPLIANCE_RESULTS.GAP_ANALYSIS_TRANSACTIONS
+   WHERE VIOLATION_TYPE = 'DATA_INCOMPLETE';
+
+  -- ================================================================
+  -- STEP 1: Pilih pasal yang relevan dengan kelengkapan / validasi
+  -- ================================================================
+  CREATE OR REPLACE TEMPORARY TABLE _tmp_completeness_regs AS
+  SELECT REG_ID, REGULATION_SOURCE, PASAL, TITLE, SEVERITY, CATEGORY, CONTENT
+  FROM COMPLIANCE_DOCS.REGULATIONS
+  WHERE REGULATION_SOURCE IN ('KEBIJAKAN_KHUSUS','BI_REGULATION')
+    AND ( UPPER(CONTENT) LIKE '%WAJIB%MEMUAT%'
+       OR UPPER(CONTENT) LIKE '%HARUS%MEMUAT%'
+       OR UPPER(CONTENT) LIKE '%PALING KURANG MEMUAT%'
+       OR UPPER(CONTENT) LIKE '%PALING SEDIKIT MEMUAT%'
+       OR UPPER(CONTENT) LIKE '%MEMASTIKAN DAN MELAKUKAN VALIDASI%'
+       OR UPPER(CONTENT) LIKE '%MELAKUKAN VALIDASI ATAS%'
+       OR UPPER(CONTENT) LIKE '%IDENTITAS LENGKAP%'
+       OR UPPER(CONTENT) LIKE '%KELENGKAPAN DATA%'
+       OR UPPER(CONTENT) LIKE '%KETENTUAN KYC%'
+       OR UPPER(CONTENT) LIKE '%CDD%' );
+
+  -- ================================================================
+  -- STEP 2: Per (pasal × tabel transaksi) → AI ekstrak required cols
+  -- ================================================================
+  CREATE OR REPLACE TEMPORARY TABLE _tmp_table_schemas AS
+  SELECT TABLE_NAME,
+         LISTAGG(COLUMN_NAME || ' ' || DATA_TYPE, ', ') WITHIN GROUP (ORDER BY ORDINAL_POSITION) AS SCHEMA_DESC
+  FROM BTN_COMPLIANCE_AI_DEMO.INFORMATION_SCHEMA.COLUMNS
+  WHERE TABLE_SCHEMA = 'TRANSACTION_DATA'
+    AND TABLE_NAME IN ('TLHIST_TRANSAKSI','GOAML_ODM_TRANSAKSI','RTGS_SKNBI_PAYMENT')
+  GROUP BY TABLE_NAME;
+
+  CREATE OR REPLACE TEMPORARY TABLE _tmp_required AS
+  SELECT r.REG_ID, r.REGULATION_SOURCE, r.PASAL, r.TITLE AS REG_TITLE,
+         r.SEVERITY AS REG_SEVERITY, r.CATEGORY AS REG_CATEGORY,
+         t.TABLE_NAME,
+         SNOWFLAKE.CORTEX.COMPLETE('claude-opus-4-7',
+           'Kamu adalah Data Quality Auditor untuk bank Indonesia. Identifikasi kolom mandatory yang HARUS TERISI (non-null, non-empty) untuk setiap baris transaksi.\n\n' ||
+           'PASAL: ' || r.PASAL || ' - ' || r.TITLE || ' (' || r.REGULATION_SOURCE || ')\n' ||
+           'Isi: ' || LEFT(r.CONTENT, 1500) || '\n\n' ||
+           'TABEL: TRANSACTION_DATA.' || t.TABLE_NAME || '\n' ||
+           'Schema: ' || t.SCHEMA_DESC || '\n\n' ||
+           'PANDUAN PEMETAAN ISTILAH PASAL → KOLOM (gunakan ini secara agresif):\n' ||
+           '  - "identitas pengirim / nasabah pengirim" → kolom nama+rekening pengirim (NAMA_PENGIRIM, NIK_PENGIRIM, NO_REKENING, CIF, SENDER_NAME, SENDER_NIK, SENDER_ACC).\n' ||
+           '  - "identitas penerima / nasabah penerima" → kolom nama+rekening penerima (NAMA_PENERIMA, NAMA_LAWAN_INDV/CORP, REK_LAWAN, ACC_LAWAN, BENEFICIARY_NAME, BENEFICIARY_ACC).\n' ||
+           '  - "identitas Bank penerima / lokasi/kota kantor / nama Bank" → SEMUA kolom bank counterparty: BANK_LAWAN, SWIFT_LAWAN, BIC_BENEFICIARY, BENEFICIARY_BANK, BENEFICIARY_BANK_CODE, CNTRY_LAWAN. SWIFT/BIC WAJIB untuk transaksi lintas negara.\n' ||
+           '  - "jumlah dana / nilai transaksi" → AMOUNT, IDR_AMT, ORIG_AMT, IDR_AMOUNT.\n' ||
+           '  - "tanggal perintah transfer / tanggal transaksi" → TX_DATE, TRX_DATE, PAYMENT_DATE, POST_DATE.\n' ||
+           '  - "informasi lain yang diwajibkan / referensi" → REF_NUMBER, REF_NUM, REMITTANCE_INFO, PURPOSE_CODE, PURPOSE_DESC.\n' ||
+           '  - "validasi / KYC / CDD" → SENDER_NIK, NIK_PENGIRIM, NIK_NASABAH, NPWP, KYC_VERIFIED, AML_SCREENING.\n\n' ||
+           'PRINSIP: untuk pasal yang menyebut konsep di atas, masukkan SEMUA kolom related yang ada di schema tabel ini. Lebih baik over-include daripada miss. Jangan filter berdasarkan asumsi "ini opsional", karena auditor akan tetap memeriksa kolom yang tersedia.\n' ||
+           'Untuk pasal yang TIDAK relevan dengan tabel transaksi ini sama sekali, return [].\n' ||
+           'Return HANYA JSON array nama kolom (UPPER_CASE persis seperti di schema), tanpa markdown/backtick. Contoh: ["BANK_LAWAN","SWIFT_LAWAN","ACC_LAWAN"]'
+         ) AS RAW_RESP
+  FROM _tmp_completeness_regs r CROSS JOIN _tmp_table_schemas t;
+
+  -- Flatten JSON array -> baris per (reg, table, column)
+  CREATE OR REPLACE TEMPORARY TABLE _tmp_required_flat AS
+  SELECT REG_ID, REGULATION_SOURCE, PASAL, REG_TITLE, REG_SEVERITY, REG_CATEGORY,
+         TABLE_NAME, UPPER(TRIM(f.value::VARCHAR)) AS COLUMN_NAME
+  FROM _tmp_required,
+       LATERAL FLATTEN(input => TRY_PARSE_JSON(REGEXP_REPLACE(REGEXP_REPLACE(RAW_RESP,'^[ \\n]*```(json)?',''),'```[ \\n]*$',''))) f
+  WHERE TRY_PARSE_JSON(REGEXP_REPLACE(REGEXP_REPLACE(RAW_RESP,'^[ \\n]*```(json)?',''),'```[ \\n]*$','')) IS NOT NULL;
+
+  -- Hapus column yang tidak ada di schema (proteksi dari LLM hallucination)
+  CREATE OR REPLACE TEMPORARY TABLE _tmp_required_valid AS
+  SELECT rf.*
+  FROM _tmp_required_flat rf
+  JOIN BTN_COMPLIANCE_AI_DEMO.INFORMATION_SCHEMA.COLUMNS c
+    ON c.TABLE_SCHEMA = 'TRANSACTION_DATA'
+   AND c.TABLE_NAME   = rf.TABLE_NAME
+   AND UPPER(c.COLUMN_NAME) = rf.COLUMN_NAME;
+
+  -- ================================================================
+  -- STEP 3: Run actual NULL/empty count via dynamic SQL
+  -- ================================================================
+  cnt_sql := (
+    SELECT LISTAGG(
+      'SELECT ''' || TABLE_NAME || ''' AS T, ''' || COLUMN_NAME || ''' AS C, ' ||
+      'COUNT(*) AS TOTAL_ROWS, ' ||
+      'COUNT(*) - COUNT("' || COLUMN_NAME || '") AS NULL_ROWS, ' ||
+      'COALESCE(SUM(CASE WHEN "' || COLUMN_NAME || '" IS NOT NULL AND TRIM("' || COLUMN_NAME || '"::STRING) = '''' THEN 1 ELSE 0 END), 0) AS EMPTY_ROWS ' ||
+      'FROM BTN_COMPLIANCE_AI_DEMO.TRANSACTION_DATA."' || TABLE_NAME || '"',
+      ' UNION ALL '
+    )
+    FROM (SELECT DISTINCT TABLE_NAME, COLUMN_NAME FROM _tmp_required_valid)
+  );
+
+  IF (cnt_sql IS NULL OR LENGTH(cnt_sql) = 0) THEN
+    RETURN 'No completeness rules matched or no required columns found.';
+  END IF;
+
+  EXECUTE IMMEDIATE 'CREATE OR REPLACE TEMPORARY TABLE _tmp_completeness_stats AS ' || :cnt_sql;
+
+  -- ================================================================
+  -- STEP 4: Insert findings ke GAP_ANALYSIS_TRANSACTIONS
+  --         hanya kolom yang punya NULL/empty > 0
+  -- ================================================================
+  INSERT INTO COMPLIANCE_RESULTS.GAP_ANALYSIS_TRANSACTIONS
+    (TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE,
+     AI_CLASSIFICATION, AI_SENSITIVITY, RISK_LEVEL,
+     REG_ID, REGULATION_SOURCE, PASAL, REG_CATEGORY, REG_TITLE, REG_SEVERITY,
+     IS_VIOLATION, VIOLATION_TYPE, FINDING_SEVERITY, FINDING, RECOMMENDATION, ANALYZED_AT)
+  SELECT
+    'TRANSACTION_DATA' AS TABLE_SCHEMA,
+    rv.TABLE_NAME, rv.COLUMN_NAME,
+    COALESCE(ac.DATA_TYPE, 'UNKNOWN') AS DATA_TYPE,
+    COALESCE(ac.AI_CLASSIFICATION, 'TRANSACTION_ATTR'),
+    COALESCE(ac.AI_SENSITIVITY, 'MEDIUM'),
+    COALESCE(ac.RISK_LEVEL, 'MEDIUM'),
+    rv.REG_ID, rv.REGULATION_SOURCE, rv.PASAL, rv.REG_CATEGORY, rv.REG_TITLE, rv.REG_SEVERITY,
+    TRUE AS IS_VIOLATION,
+    'DATA_INCOMPLETE' AS VIOLATION_TYPE,
+    CASE WHEN cs.NULL_ROWS + cs.EMPTY_ROWS = 0 THEN 'LOW'
+         WHEN (cs.NULL_ROWS + cs.EMPTY_ROWS) * 100.0 / cs.TOTAL_ROWS >= 30 THEN 'CRITICAL'
+         WHEN (cs.NULL_ROWS + cs.EMPTY_ROWS) * 100.0 / cs.TOTAL_ROWS >= 10 THEN 'HIGH'
+         ELSE 'MEDIUM' END AS FINDING_SEVERITY,
+    'Kolom ' || rv.TABLE_NAME || '.' || rv.COLUMN_NAME ||
+      ' memiliki ' || (cs.NULL_ROWS + cs.EMPTY_ROWS) || ' dari ' || cs.TOTAL_ROWS ||
+      ' baris (' || ROUND((cs.NULL_ROWS + cs.EMPTY_ROWS) * 100.0 / cs.TOTAL_ROWS, 2) ||
+      '%) bernilai NULL/kosong, padahal ' || rv.PASAL || ' (' || rv.REG_TITLE ||
+      ') mewajibkan kolom ini terisi untuk setiap transaksi.' AS FINDING,
+    'Lakukan: (1) Backfill data historis dari source system sedapat mungkin. ' ||
+    '(2) Tambahkan validasi NOT NULL / regex di pipeline ingestion (Snowpark/Snowpipe Streaming). ' ||
+    '(3) Implementasikan Data Metric Function (DMF) NULL_COUNT pada kolom ' || rv.COLUMN_NAME ||
+    ' dengan threshold 0% dan ALERT email harian agar pelanggaran terdeteksi otomatis. ' ||
+    '(4) Pertimbangkan ALTER TABLE ADD CONSTRAINT NOT NULL untuk row baru.' AS RECOMMENDATION,
+    CURRENT_TIMESTAMP()
+  FROM _tmp_required_valid rv
+  JOIN _tmp_completeness_stats cs
+    ON cs.T = rv.TABLE_NAME AND cs.C = rv.COLUMN_NAME
+  LEFT JOIN COMPLIANCE_RESULTS.AI_CLASSIFICATION ac
+    ON ac.TABLE_NAME = rv.TABLE_NAME AND ac.COLUMN_NAME = rv.COLUMN_NAME
+  WHERE (cs.NULL_ROWS + cs.EMPTY_ROWS) > 0;
+
+  inserted_rows := (SELECT COUNT(*) FROM COMPLIANCE_RESULTS.GAP_ANALYSIS_TRANSACTIONS WHERE VIOLATION_TYPE='DATA_INCOMPLETE');
+
+  DROP TABLE IF EXISTS _tmp_completeness_regs;
+  DROP TABLE IF EXISTS _tmp_table_schemas;
+  DROP TABLE IF EXISTS _tmp_required;
+  DROP TABLE IF EXISTS _tmp_required_flat;
+  DROP TABLE IF EXISTS _tmp_required_valid;
+  DROP TABLE IF EXISTS _tmp_completeness_stats;
+
+  RETURN 'Data completeness audit done. ' || inserted_rows || ' DATA_INCOMPLETE findings inserted into GAP_ANALYSIS_TRANSACTIONS.';
+END;
+$$;
+
+-- -----------------------------------------------------------------------------
 -- Initial population (call all once)
 -- -----------------------------------------------------------------------------
 -- CALL COMPLIANCE_RESULTS.SP_REFRESH_AI_CLASSIFICATION();
 -- CALL COMPLIANCE_RESULTS.SP_REFRESH_UC1();
 -- CALL COMPLIANCE_RESULTS.SP_REFRESH_TX_GAP('KEBIJAKAN_KHUSUS');
 -- CALL COMPLIANCE_RESULTS.SP_REFRESH_TX_GAP('BI_REGULATION');
+-- CALL COMPLIANCE_RESULTS.SP_REFRESH_DATA_COMPLETENESS();
 -- CALL COMPLIANCE_RESULTS.SP_REFRESH_UC4();
