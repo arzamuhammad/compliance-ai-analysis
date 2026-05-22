@@ -1,15 +1,67 @@
 -- ============================================================================
+-- 04_gap_analysis.sql
 -- STEP 5: AI COMPLIANCE GAP ANALYSIS (Full AI-Driven)
--- Feature: Cortex LLM MEMBACA isi regulasi dan MENCOCOKKAN dengan kolom
--- 
--- Cara kerja (v3.0 - Full AI-Driven):
---   1. Collect governance state (masking policies, RAP, time travel)
---   2. Build context: semua kolom + AI classification + governance status
---   3. Per regulasi: Cortex LLM membaca CONTENT regulasi (dari PDF) 
---      dan menganalisis semua kolom yang RELEVAN → COMPLIANT/VIOLATION
---   4. Flatten JSON findings → INSERT ke tabel
+-- ============================================================================
 --
--- BUKAN hardcoded mapping! AI benar-benar memahami isi regulasi.
+-- FUNGSI / TUJUAN:
+--   Mem-VONIS apakah data & governance bank sudah COMPLIANT dengan
+--   regulasi. Script ini menjawab pertanyaan: "Apakah kolom-kolom database
+--   kita sudah memenuhi setiap pasal regulasi (UU PDP / kebijakan internal /
+--   peraturan BI/OJK)?"
+--
+--   Outputnya adalah daftar finding (COMPLIANT / VIOLATION / WARNING)
+--   per pasangan (kolom × regulasi) lengkap dengan rekomendasi
+--   actionable. Tabel inilah yang menjadi sumber utama dashboard
+--   Streamlit (sql/05 + streamlit/btn_compliance_dashboard.py).
+--
+-- INPUT:
+--   - COMPLIANCE_RESULTS.AI_CLASSIFICATION  (label kolom dari script 03)
+--   - COMPLIANCE_DOCS.REGULATIONS           (isi pasal regulasi dari
+--                                            PDF/DOCX hasil script 02)
+--   - Governance state real-time:
+--       * Masking policies (INFORMATION_SCHEMA.POLICY_REFERENCES)
+--       * Row access policies
+--       * Time travel retention
+--
+-- PROSES (4 langkah):
+--   1. Kumpulkan governance state aktual (policy mana yang sudah dipasang)
+--   2. Bangun "context string" berisi semua kolom + klasifikasi + status
+--      proteksi, dan semua tabel + status RAP + retention
+--   3. Untuk SETIAP regulasi (1 LLM call per regulasi), Cortex LLM:
+--        - MEMBACA isi pasal regulasi (CONTENT dari PDF)
+--        - Memilih kolom/tabel yang RELEVAN
+--        - Menentukan COMPLIANT / VIOLATION / WARNING + alasan +
+--          rekomendasi
+--   4. Flatten JSON response → INSERT ke COMPLIANCE_GAP_ANALYSIS
+--
+--   PENTING: Ini BUKAN hardcoded rule mapping. AI benar-benar memahami
+--   isi regulasi dan memilih sendiri kolom mana yang relevan.
+--
+-- OUTPUT:
+--   - COMPLIANCE_RESULTS.COMPLIANCE_GAP_ANALYSIS    (tabel finding utama)
+--   - V_OVERALL_COMPLIANCE                          (KPI total)
+--   - V_COMPLIANCE_SCORE_BY_TABLE                   (skor per tabel)
+--   - V_COMPLIANCE_SCORE_BY_REGULATION              (skor per pasal)
+--
+-- DEPENDENCY:
+--   - sql/03_ai_classification.sql HARUS sudah dijalankan (tabel
+--     AI_CLASSIFICATION wajib ada)
+--   - sql/02_parse_documents.sql HARUS sudah dijalankan (tabel
+--     REGULATIONS berisi pasal-pasal hasil parse PDF/DOCX)
+--
+-- POSISI DI PIPELINE:
+--   01_data_setup → 02_parse_documents → 03_ai_classification →
+--   [04_gap_analysis] → 05_refresh_stored_procedures
+--
+-- BEDA DENGAN 03_ai_classification.sql:
+--   03 = MEN-LABEL data         ("kolom ini PII / sensitif / financial?")
+--   04 = MEM-VONIS data vs aturan ("kolom PII ini sudah comply UU PDP?")
+--
+--   Analogi: 03 seperti petugas administrasi yang memberi tag ke setiap
+--   dokumen ("rahasia", "publik", "internal"). 04 seperti auditor yang
+--   memeriksa apakah dokumen "rahasia" itu sudah disimpan di brankas
+--   sesuai SOP. Tanpa tag dari 03, auditor di 04 tidak tahu dokumen
+--   mana yang harus diperiksa.
 -- ============================================================================
 
 -- 5a. Buat Stored Procedure untuk Gap Analysis

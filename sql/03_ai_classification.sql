@@ -1,5 +1,60 @@
 -- ============================================================================
+-- 03_ai_classification.sql
 -- STEP 4: AI DATA CLASSIFICATION (Cortex LLM)
+-- ============================================================================
+--
+-- FUNGSI / TUJUAN:
+--   Memberi "LABEL" pada setiap kolom database. Script ini menjawab
+--   pertanyaan: "Kolom ini DATA APA?"
+--   (PII? Financial? Sensitive? Perlu masking? Sudah ter-hash atau masih
+--   plain text?)
+--
+--   Output script ini adalah dasar (foundation) untuk gap analysis di
+--   script 04. Tanpa klasifikasi ini, AI tidak tahu kolom mana yang
+--   relevan dengan regulasi tertentu.
+--
+-- INPUT:
+--   - Metadata kolom dari INFORMATION_SCHEMA.COLUMNS
+--     (table_name, column_name, data_type)
+--   - Sample nilai aktual dari setiap kolom sensitif (5 baris)
+--
+-- PROSES (2 tahap):
+--   Tahap A — METADATA-LEVEL CLASSIFICATION (SP_AI_CLASSIFY_COLUMNS)
+--     Cortex LLM membaca nama tabel + nama kolom + tipe data, lalu
+--     mengklasifikasikan:
+--       * AI_CLASSIFICATION : IDENTIFIER / QUASI_IDENTIFIER / FINANCIAL /
+--                             SENSITIVE / NON_SENSITIVE
+--       * AI_SENSITIVITY    : CRITICAL / HIGH / MEDIUM / LOW
+--       * NEEDS_MASKING     : true/false
+--       * NEEDS_TAG         : true/false
+--       * RISK_LEVEL        : CRITICAL / HIGH / MEDIUM / LOW
+--       * AI_REASON         : alasan klasifikasi
+--
+--   Tahap B — VALUE-LEVEL AUDIT (SP_AI_VALUE_LEVEL_AUDIT)
+--     Untuk kolom CRITICAL/HIGH, AI MELIHAT NILAI AKTUAL (5 baris sample)
+--     dan menentukan apakah data:
+--       PLAIN_TEXT / HASHED / MASKED / ENCRYPTED / TOKENIZED / REDACTED
+--     Tujuannya menghilangkan false positive (misal kolom dilaporkan
+--     violation padahal datanya sudah di-hash dari source system).
+--
+-- OUTPUT (tabel hasil):
+--   - COMPLIANCE_RESULTS.AI_CLASSIFICATION  (label per kolom)
+--   - COMPLIANCE_RESULTS.VALUE_LEVEL_AUDIT  (status proteksi per kolom)
+--
+-- DEPENDENCY:
+--   - Tabel customer/transaction (NASABAH, REKENING, KARTU_KREDIT,
+--     TRANSAKSI, LOAN_APPLICATION) sudah dibuat di sql/01_data_setup.sql
+--
+-- POSISI DI PIPELINE:
+--   01_data_setup → 02_parse_documents → [03_ai_classification] →
+--   04_gap_analysis → 05_refresh_stored_procedures
+--
+-- BEDA DENGAN 04_gap_analysis.sql:
+--   03 = MEN-LABEL data ("kolom ini PII / sensitif / financial?")
+--   04 = MEM-VONIS data ("apakah kolom ini compliant terhadap regulasi?")
+--   03 adalah prerequisite untuk 04. AI di 04 memakai label dari 03 untuk
+--   memilih kolom mana yang perlu dicek terhadap setiap pasal regulasi.
+-- ============================================================================
 -- Feature: Cortex COMPLETE - AI classifies every column automatically
 -- ============================================================================
 
