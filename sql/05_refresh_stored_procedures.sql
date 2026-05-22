@@ -321,11 +321,49 @@ $$;
 CREATE OR REPLACE PROCEDURE COMPLIANCE_RESULTS.SP_REFRESH_TX_GAP(REG_SOURCE STRING)
 RETURNS STRING LANGUAGE SQL EXECUTE AS CALLER AS
 $$
-DECLARE rc INTEGER;
+DECLARE
+  rc INTEGER;
+  TASK_LIST_QID STRING;
 BEGIN
+  -- Ensure retention-state columns exist (idempotent)
+  ALTER TABLE COMPLIANCE_RESULTS.GAP_ANALYSIS_TRANSACTIONS ADD COLUMN IF NOT EXISTS HAS_LIFECYCLE_POLICY BOOLEAN;
+  ALTER TABLE COMPLIANCE_RESULTS.GAP_ANALYSIS_TRANSACTIONS ADD COLUMN IF NOT EXISTS HAS_ARCHIVE_TASK     BOOLEAN;
+
   DELETE FROM COMPLIANCE_RESULTS.GAP_ANALYSIS_TRANSACTIONS WHERE REGULATION_SOURCE = :REG_SOURCE;
 
+  -- ================================================================
+  -- STEP 0: FACTUAL RETENTION STATE for transaction tables
+  -- ================================================================
+  CREATE OR REPLACE TEMPORARY TABLE _tmp_lifecycle_tx AS
+    SELECT 'TLHIST_TRANSAKSI'    AS TABLE_NAME, COUNT(*) AS N FROM TABLE(INFORMATION_SCHEMA.POLICY_REFERENCES(REF_ENTITY_NAME=>'BTN_COMPLIANCE_AI_DEMO.TRANSACTION_DATA.TLHIST_TRANSAKSI',    REF_ENTITY_DOMAIN=>'TABLE')) WHERE POLICY_KIND='STORAGE_LIFECYCLE_POLICY'
+    UNION ALL SELECT 'GOAML_ODM_TRANSAKSI', COUNT(*) FROM TABLE(INFORMATION_SCHEMA.POLICY_REFERENCES(REF_ENTITY_NAME=>'BTN_COMPLIANCE_AI_DEMO.TRANSACTION_DATA.GOAML_ODM_TRANSAKSI', REF_ENTITY_DOMAIN=>'TABLE')) WHERE POLICY_KIND='STORAGE_LIFECYCLE_POLICY'
+    UNION ALL SELECT 'RTGS_SKNBI_PAYMENT',  COUNT(*) FROM TABLE(INFORMATION_SCHEMA.POLICY_REFERENCES(REF_ENTITY_NAME=>'BTN_COMPLIANCE_AI_DEMO.TRANSACTION_DATA.RTGS_SKNBI_PAYMENT',  REF_ENTITY_DOMAIN=>'TABLE')) WHERE POLICY_KIND='STORAGE_LIFECYCLE_POLICY';
+
+  SHOW TASKS IN DATABASE BTN_COMPLIANCE_AI_DEMO;
+  TASK_LIST_QID := LAST_QUERY_ID();
+
+  CREATE OR REPLACE TEMPORARY TABLE _tmp_archive_tasks_tx AS
+    SELECT "name" AS TASK_NAME, "definition" AS DEF
+    FROM TABLE(RESULT_SCAN(:TASK_LIST_QID))
+    WHERE "state" = 'started'
+      AND ( UPPER("name")       RLIKE '.*(ARCHIVE|ARCHIVAL|PURGE|RETENTION|ANONYMIZE|BACKUP).*'
+         OR UPPER("definition") RLIKE '.*(ARCHIVE|ARCHIVAL|PURGE|ANONYMIZE|BACKUP).*');
+
+  CREATE OR REPLACE TEMPORARY TABLE _tmp_retention_state_tx AS
+    SELECT lc.TABLE_NAME,
+           (lc.N > 0) AS HAS_LIFECYCLE_POLICY,
+           EXISTS(
+             SELECT 1 FROM _tmp_archive_tasks_tx t
+             WHERE UPPER(t.DEF) LIKE '%' || UPPER(lc.TABLE_NAME) || '%'
+                OR UPPER(t.TASK_NAME) LIKE '%' || UPPER(lc.TABLE_NAME) || '%'
+           ) AS HAS_ARCHIVE_TASK
+    FROM _tmp_lifecycle_tx lc;
+
   INSERT INTO COMPLIANCE_RESULTS.GAP_ANALYSIS_TRANSACTIONS
+    (TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE, AI_CLASSIFICATION, AI_SENSITIVITY, RISK_LEVEL,
+     REG_ID, REGULATION_SOURCE, PASAL, REG_CATEGORY, REG_TITLE, REG_SEVERITY,
+     IS_VIOLATION, VIOLATION_TYPE, FINDING_SEVERITY, FINDING, RECOMMENDATION, ANALYZED_AT,
+     HAS_LIFECYCLE_POLICY, HAS_ARCHIVE_TASK)
   WITH cols AS (
     SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE, AI_CLASSIFICATION, AI_SENSITIVITY, RISK_LEVEL, AI_REASON, CONTAINS_PII, NEEDS_MASKING
     FROM COMPLIANCE_RESULTS.AI_CLASSIFICATION WHERE TABLE_SCHEMA='TRANSACTION_DATA'
@@ -336,37 +374,46 @@ BEGIN
   ),
   pairs AS (
     SELECT c.*, r.REG_ID, r.REGULATION_SOURCE, r.PASAL, r.CATEGORY AS REG_CATEGORY,
-           r.TITLE AS REG_TITLE, r.SEVERITY AS REG_SEVERITY, r.CONTENT AS REG_CONTENT, r.APPLIES_TO
+           r.TITLE AS REG_TITLE, r.SEVERITY AS REG_SEVERITY, r.CONTENT AS REG_CONTENT, r.APPLIES_TO,
+           COALESCE(rs.HAS_LIFECYCLE_POLICY, FALSE) AS HAS_LIFECYCLE_POLICY,
+           COALESCE(rs.HAS_ARCHIVE_TASK,  FALSE)   AS HAS_ARCHIVE_TASK
     FROM cols c JOIN regs r ON
       (r.CATEGORY IN ('KYC_AML','TRANSACTION_REPORTING','FRAUD_PREVENTION') AND c.AI_SENSITIVITY IN ('CRITICAL','HIGH'))
       OR (r.CATEGORY IN ('SETTLEMENT_RISK','OPERATIONAL_RISK') AND c.TABLE_NAME='RTGS_SKNBI_PAYMENT')
       OR (r.CATEGORY = 'FOREIGN_EXCHANGE' AND c.COLUMN_NAME ILIKE ANY('%CCY%','%CURRENCY%','%XRATE%','%SWIFT%','%CNTRY%','%BIC%'))
       OR (r.CATEGORY IN ('DATA_MASKING','ACCESS_CONTROL','AUDIT_TRAIL','REPORTING') AND c.CONTAINS_PII=TRUE)
+      OR (r.CATEGORY = 'DATA_RETENTION' AND c.AI_SENSITIVITY IN ('CRITICAL','HIGH','MEDIUM'))
+    LEFT JOIN _tmp_retention_state_tx rs ON rs.TABLE_NAME = c.TABLE_NAME
   ),
   raw AS (
     SELECT *,
       SNOWFLAKE.CORTEX.COMPLETE('claude-opus-4-7',
-        'Bank. Asumsikan BELUM apply masking/audit/AML controls. KOLOM: ' || TABLE_SCHEMA || '.' || TABLE_NAME || '.' || COLUMN_NAME ||
+        'Bank. KOLOM: ' || TABLE_SCHEMA || '.' || TABLE_NAME || '.' || COLUMN_NAME ||
         ' (' || DATA_TYPE || ', ' || AI_CLASSIFICATION || ')\nKONTEKS: ' || AI_REASON ||
         '\n\nREGULASI (' || REGULATION_SOURCE || ') Pasal ' || PASAL || ': ' || REG_TITLE || ' | KATEGORI: ' || REG_CATEGORY ||
         '\nIsi: ' || LEFT(REG_CONTENT,1500) ||
-        '\n\nCATATAN PLATFORM (PENTING - JANGAN DILANGGAR):\n' ||
-        '- Snowflake SUDAH menyediakan AUDIT TRAIL built-in (SNOWFLAKE.ACCOUNT_USAGE.ACCESS_HISTORY, QUERY_HISTORY, LOGIN_HISTORY) untuk SEMUA akses kolom/tabel tanpa konfigurasi tambahan.\n' ||
+        '\n\nFAKTA GOVERNANCE TABEL ' || TABLE_NAME || ' (real-time check):\n' ||
+        '- has_storage_lifecycle_policy = ' || IFF(HAS_LIFECYCLE_POLICY, 'TRUE', 'FALSE') || '\n' ||
+        '- has_archival_task            = ' || IFF(HAS_ARCHIVE_TASK,  'TRUE', 'FALSE') || '\n\n' ||
+        'CATATAN PLATFORM (PENTING - JANGAN DILANGGAR):\n' ||
+        '- Snowflake SUDAH menyediakan AUDIT TRAIL built-in (ACCESS_HISTORY, QUERY_HISTORY, LOGIN_HISTORY) tanpa konfigurasi tambahan.\n' ||
         '- Semua data terenkripsi at-rest (AES-256) dan in-transit (TLS 1.2+) by default.\n' ||
-        '- Time Travel & Fail-safe aktif default → DATA_RETENTION dasar terpenuhi.\n' ||
-        '- Karena itu, JANGAN tandai sebagai VIOLATION untuk: AUDIT_TRAIL, AUDIT_LOG_MISSING, atau ENCRYPTION at-rest. Set is_violation=false untuk kasus tersebut.\n\n' ||
+        '- JANGAN tandai sebagai VIOLATION untuk: AUDIT_TRAIL atau ENCRYPTION at-rest. Set is_violation=false.\n\n' ||
         'ATURAN KONSISTENSI KATEGORI (WAJIB):\n' ||
-        'Finding & recommendation HARUS sesuai dengan KATEGORI pasal di atas. Jangan rekomendasi masking padahal pasal-nya soal retensi/AML/KYC/dll.\n' ||
-        '- DATA_MASKING / ENCRYPTION → fokus Dynamic Data Masking Policy.\n' ||
-        '- ACCESS_CONTROL → fokus Row Access Policy + RBAC + least-privilege role.\n' ||
-        '- DATA_CLASSIFICATION → fokus object tagging (PII, PII_FINANCIAL, dll), classification framework.\n' ||
-        '- DATA_RETENTION → fokus DATA ARCHIVAL LIFECYCLE: scheduled TASK yang memindahkan data inactive (>X tahun) ke schema arsip terpisah, atau anonymization. Time Travel BUKAN archival. JANGAN rekomendasi masking.\n' ||
-        '- KYC_AML / FRAUD_PREVENTION → fokus identity verification, AML screening (sanction list, PEP), suspicious transaction reporting.\n' ||
-        '- TRANSACTION_REPORTING / REPORTING → fokus regulatory reporting pipeline (LTKM/LTKT/SLIK), threshold alerts, scheduled task.\n' ||
-        '- SETTLEMENT_RISK / OPERATIONAL_RISK → fokus dual-control approval, settlement monitoring, exception handling.\n' ||
-        '- FOREIGN_EXCHANGE → fokus FX rate validation, threshold cross-border, BI devisa reporting.\n' ||
+        '- DATA_MASKING / ENCRYPTION → Dynamic Data Masking Policy.\n' ||
+        '- ACCESS_CONTROL → Row Access Policy + RBAC + least-privilege role.\n' ||
+        '- DATA_CLASSIFICATION → object tagging, classification framework.\n' ||
+        '- DATA_RETENTION → cek 2 hal yang sudah disediakan di atas:\n' ||
+        '    (a) STORAGE LIFECYCLE POLICY (auto-archive/expire ke tier COOL/COLD).\n' ||
+        '    (b) Snowflake TASK terjadwal yang memindahkan/anonymize data inactive.\n' ||
+        '  KEPUTUSAN: jika has_storage_lifecycle_policy=TRUE ATAU has_archival_task=TRUE → COMPLIANT (is_violation=false). Jika KEDUANYA FALSE → VIOLATION dengan rekomendasi 2 opsi.\n' ||
+        '  Time Travel BUKAN archival, JANGAN sebut DATA_RETENTION_TIME_IN_DAYS.\n' ||
+        '- KYC_AML / FRAUD_PREVENTION → identity verification, AML screening, suspicious transaction reporting.\n' ||
+        '- TRANSACTION_REPORTING / REPORTING → regulatory reporting pipeline (LTKM/LTKT/SLIK), threshold alerts.\n' ||
+        '- SETTLEMENT_RISK / OPERATIONAL_RISK → dual-control approval, settlement monitoring.\n' ||
+        '- FOREIGN_EXCHANGE → FX rate validation, threshold cross-border, BI devisa reporting.\n' ||
         '- AUDIT_TRAIL → set is_violation=false (Snowflake built-in).\n\n' ||
-        'Apakah kolom berkaitan & comply? Return JSON:\n{"is_violation":<true|false>,"violation_type":"<MASKING_MISSING|AUDIT_LOG_MISSING|KYC_MISSING|AML_SCREENING_MISSING|REPORTING_MISSING|ACCESS_CONTROL_MISSING|DATA_RETENTION_MISSING|N/A>","severity":"<CRITICAL|HIGH|MEDIUM|LOW>","finding":"1 kalimat bahasa Indonesia, sebut nama pasal/kategori","recommendation":"remediasi 1-2 kalimat bahasa Indonesia, harus sesuai KATEGORI pasal di atas"}'
+        'Apakah kolom berkaitan & comply? Return JSON:\n{"is_violation":<true|false>,"violation_type":"<MASKING_MISSING|AUDIT_LOG_MISSING|KYC_MISSING|AML_SCREENING_MISSING|REPORTING_MISSING|ACCESS_CONTROL_MISSING|RETENTION_MISSING|N/A>","severity":"<CRITICAL|HIGH|MEDIUM|LOW>","finding":"1 kalimat bahasa Indonesia, sebut nama pasal/kategori","recommendation":"remediasi 1-2 kalimat bahasa Indonesia, harus sesuai KATEGORI pasal di atas"}'
       ) AS llm_resp
     FROM pairs
   )
@@ -377,10 +424,11 @@ BEGIN
     TRIM(TRY_PARSE_JSON(REGEXP_REPLACE(REGEXP_REPLACE(llm_resp,'^[ \\n]*```(json)?',''),'```[ \\n]*$','')):severity::VARCHAR) AS FINDING_SEVERITY,
     TRIM(TRY_PARSE_JSON(REGEXP_REPLACE(REGEXP_REPLACE(llm_resp,'^[ \\n]*```(json)?',''),'```[ \\n]*$','')):finding::VARCHAR) AS FINDING,
     TRIM(TRY_PARSE_JSON(REGEXP_REPLACE(REGEXP_REPLACE(llm_resp,'^[ \\n]*```(json)?',''),'```[ \\n]*$','')):recommendation::VARCHAR) AS RECOMMENDATION,
-    CURRENT_TIMESTAMP() AS ANALYZED_AT
+    CURRENT_TIMESTAMP() AS ANALYZED_AT,
+    HAS_LIFECYCLE_POLICY, HAS_ARCHIVE_TASK
   FROM raw;
-  -- Post-filter override: Snowflake provides AUDIT TRAIL & ENCRYPTION at-rest by default
-  -- Demote any LLM-flagged AUDIT_LOG_MISSING / ENCRYPTION_MISSING for this REG_SOURCE.
+
+  -- Post-filter A: AUDIT/ENCRYPTION → COMPLIANT (Snowflake built-in)
   UPDATE COMPLIANCE_RESULTS.GAP_ANALYSIS_TRANSACTIONS
      SET IS_VIOLATION    = FALSE,
          VIOLATION_TYPE  = 'N/A',
@@ -390,17 +438,39 @@ BEGIN
      AND ( UPPER(VIOLATION_TYPE) IN ('AUDIT_LOG_MISSING','ENCRYPTION_MISSING')
         OR UPPER(REG_CATEGORY) IN ('AUDIT_TRAIL','ENCRYPTION') );
 
-  -- Post-filter override: category-mismatch fix for DATA_RETENTION pasal.
+  -- Post-filter B: DATA_RETENTION dengan retention state aktual
+  -- B1: salah satu retention control aktif → COMPLIANT
   UPDATE COMPLIANCE_RESULTS.GAP_ANALYSIS_TRANSACTIONS
-     SET VIOLATION_TYPE  = 'RETENTION_MISSING',
-         FINDING         = 'Kolom ' || TABLE_NAME || '.' || COLUMN_NAME ||
-                           ' belum tercakup dalam data archival lifecycle policy sesuai ' || PASAL || ' tentang ' || REG_TITLE ||
-                           ' - tidak ada scheduled job yang memindahkan data inactive ke schema arsip atau melakukan anonymization setelah masa retensi.',
-         RECOMMENDATION  = 'Buat schema/database arsip terpisah (mis. TRANSACTION_DATA_ARCHIVE) dan jadwalkan Snowflake TASK yang memindahkan transaksi >5 tahun ke schema tersebut, lalu DELETE dari tabel utama. Untuk data transaksi sangat lama, lakukan anonymization PII atau pindahkan ke external table di object storage murah. Time Travel hanya untuk recovery, bukan archival.'
+     SET IS_VIOLATION    = FALSE,
+         VIOLATION_TYPE  = 'N/A',
+         FINDING         = 'COMPLIANT - Tabel ' || TABLE_NAME ||
+                           ' sudah punya kontrol retensi: ' ||
+                           IFF(HAS_LIFECYCLE_POLICY, 'Storage Lifecycle Policy attached', '') ||
+                           IFF(HAS_LIFECYCLE_POLICY AND HAS_ARCHIVE_TASK, ' + ', '') ||
+                           IFF(HAS_ARCHIVE_TASK, 'Scheduled archival TASK aktif', '') || '.',
+         RECOMMENDATION  = 'Tidak perlu tindakan tambahan. Pastikan policy/task tetap aktif dan threshold retensi (mis. 5 tahun untuk transaksi keuangan) sesuai pasal regulasi.'
    WHERE REGULATION_SOURCE = :REG_SOURCE
-     AND UPPER(REG_CATEGORY) IN ('DATA_RETENTION')
-     AND IS_VIOLATION = TRUE
-     AND UPPER(VIOLATION_TYPE) IN ('MASKING_MISSING','ACCESS_CONTROL_MISSING','ENCRYPTION_MISSING');
+     AND UPPER(REG_CATEGORY) = 'DATA_RETENTION'
+     AND (HAS_LIFECYCLE_POLICY = TRUE OR HAS_ARCHIVE_TASK = TRUE);
+
+  -- B2: tidak ada satupun → VIOLATION dengan rekomendasi 2 opsi
+  UPDATE COMPLIANCE_RESULTS.GAP_ANALYSIS_TRANSACTIONS
+     SET IS_VIOLATION    = TRUE,
+         VIOLATION_TYPE  = 'RETENTION_MISSING',
+         FINDING         = 'Tabel ' || TABLE_NAME ||
+                           ' tidak memiliki Storage Lifecycle Policy maupun scheduled archival TASK, sehingga kolom ' || COLUMN_NAME ||
+                           ' melanggar ' || PASAL || ' tentang ' || REG_TITLE || '.',
+         RECOMMENDATION  = 'Pilih salah satu pendekatan: '
+                           || '(1) Apply STORAGE LIFECYCLE POLICY pada tabel - CREATE STORAGE LIFECYCLE POLICY <name> EXPRESSION (TX_DATE < DATEADD(YEAR,-5,CURRENT_DATE())) ARCHIVE_FOR_DAYS=180 TIER=COLD; lalu ALTER TABLE ' || TABLE_NAME || ' ADD STORAGE LIFECYCLE POLICY <name>. '
+                           || 'ATAU (2) Buat schema arsip terpisah (TRANSACTION_DATA_ARCHIVE) + Snowflake TASK harian yang COPY INTO archive lalu DELETE transaksi >5 tahun, plus stored procedure untuk anonimisasi PII pengirim/penerima setelah masa retensi.'
+   WHERE REGULATION_SOURCE = :REG_SOURCE
+     AND UPPER(REG_CATEGORY) = 'DATA_RETENTION'
+     AND HAS_LIFECYCLE_POLICY = FALSE
+     AND HAS_ARCHIVE_TASK     = FALSE;
+
+  DROP TABLE IF EXISTS _tmp_lifecycle_tx;
+  DROP TABLE IF EXISTS _tmp_archive_tasks_tx;
+  DROP TABLE IF EXISTS _tmp_retention_state_tx;
 
   rc := (SELECT COUNT(*) FROM COMPLIANCE_RESULTS.GAP_ANALYSIS_TRANSACTIONS WHERE REGULATION_SOURCE = :REG_SOURCE);
   RETURN 'TX gap (' || :REG_SOURCE || ') refreshed: ' || rc || ' pairs';
