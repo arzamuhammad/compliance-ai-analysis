@@ -5,7 +5,7 @@ The platform parses regulatory documents (PDF / DOCX), classifies sensitive tabl
 columns with an LLM, and produces actionable compliance gap insights via a
 Streamlit-in-Snowflake dashboard.
 
-> Originally built as a Bank BTN POC. The pattern works for any bank / FSI that
+> Originally built as a Bank ABC POC. The pattern works for any bank / FSI that
 > needs to compare its data and internal policies against external regulations
 > (e.g., UU PDP, GDPR, PCI-DSS, regulator circulars).
 
@@ -56,7 +56,7 @@ compliance-ai-analysis/
 │   ├── 04_gap_analysis.sql         # 4 gap-analysis result tables (UC1–UC4)
 │   └── 05_refresh_stored_procedures.sql   # idempotent SP_REFRESH_* procedures
 ├── streamlit/
-│   ├── btn_compliance_dashboard.py # Streamlit-in-Snowflake app (sidebar menu, 5 tabs/UC, refresh button)
+│   ├── abc_compliance_dashboard.py # Streamlit-in-Snowflake app (sidebar menu, 5 tabs/UC, refresh button)
 │   └── environment.yml             # Streamlit-in-Snowflake conda env
 ├── .gitignore
 └── README.md
@@ -185,7 +185,7 @@ CREATE OR REPLACE STAGE STREAMLIT_STAGE
 Upload the app + env file:
 
 ```bash
-snow sql -q "PUT file:///local/path/streamlit/btn_compliance_dashboard.py @STREAMLIT_STAGE OVERWRITE=TRUE AUTO_COMPRESS=FALSE"
+snow sql -q "PUT file:///local/path/streamlit/abc_compliance_dashboard.py @STREAMLIT_STAGE OVERWRITE=TRUE AUTO_COMPRESS=FALSE"
 snow sql -q "PUT file:///local/path/streamlit/environment.yml @STREAMLIT_STAGE OVERWRITE=TRUE AUTO_COMPRESS=FALSE"
 ```
 
@@ -194,7 +194,7 @@ Create the Streamlit object:
 ```sql
 CREATE OR REPLACE STREAMLIT COMPLIANCE_DASHBOARD
   ROOT_LOCATION = '@COMPLIANCE_AI_DEMO.COMPLIANCE_DOCS.STREAMLIT_STAGE'
-  MAIN_FILE = 'btn_compliance_dashboard.py'
+  MAIN_FILE = 'abc_compliance_dashboard.py'
   QUERY_WAREHOUSE = COMPLIANCE_POC
   TITLE = 'Compliance AI Dashboard';
 ```
@@ -217,7 +217,7 @@ Each UC has 5 tabs (Overview / Rule Coverage / Column Heatmap / Action Plan / Ra
 ## Customisation
 
 - **AI model**: change `claude-opus-4-7` to any model available in `SNOWFLAKE.CORTEX.COMPLETE` (e.g., `claude-4-sonnet`, `mistral-large2`).
-- **Brand colors**: edit the `BRAND_*` constants at the top of `btn_compliance_dashboard.py`.
+- **Brand colors**: edit the `BRAND_*` constants at the top of `abc_compliance_dashboard.py`.
 - **Regulation sources**: add a new value to `REGULATION_SOURCE` and create a matching `SP_REFRESH_UC*` stored procedure.
 - **Languages**: prompts are written in Bahasa Indonesia + English; adjust the prompt strings in `sql/03_*` and `sql/04_*` if you need a different language.
 
