@@ -198,15 +198,22 @@ BEGIN
       SNOWFLAKE.CORTEX.COMPLETE('claude-opus-4-7',
         'Bank punya kolom data PII plain-text. KOLOM: ' || TABLE_NAME || '.' || COLUMN_NAME ||
         ' (' || DATA_TYPE || ', ' || AI_CLASSIFICATION || ')\nKONTEKS: ' || AI_REASON ||
-        '\n\nREGULASI Privacy - Pasal: ' || PASAL || ' | ' || REG_TITLE ||
+        '\n\nREGULASI Privacy - Pasal: ' || PASAL || ' | ' || REG_TITLE || ' | KATEGORI: ' || REG_CATEGORY ||
         '\nIsi: ' || LEFT(REG_CONTENT, 1500) ||
         '\n\nCATATAN PLATFORM (PENTING - JANGAN DILANGGAR):\n' ||
         '- Snowflake SUDAH menyediakan AUDIT TRAIL built-in melalui SNOWFLAKE.ACCOUNT_USAGE.ACCESS_HISTORY, QUERY_HISTORY, LOGIN_HISTORY untuk SEMUA query/akses tanpa konfigurasi tambahan.\n' ||
         '- Semua data Snowflake terenkripsi at-rest (AES-256) dan in-transit (TLS 1.2+) secara default.\n' ||
-        '- Snowflake Time Travel & Fail-safe aktif default untuk DATA_RETENTION.\n' ||
-        '- Karena itu, JANGAN tandai kolom sebagai VIOLATION untuk kategori AUDIT_TRAIL, AUDIT_LOG_MISSING, atau ENCRYPTION at-rest. Set is_violation=false dan violation_type=N/A untuk kasus tersebut.\n' ||
-        '- Tandai VIOLATION HANYA jika benar-benar masking/access control/retention belum dipasang sesuai pasal.\n\n' ||
-        'Apakah kolom comply? Asumsikan bank BELUM apply masking/access control. Return JSON saja:\n{"is_violation":<true|false>,"violation_type":"<MASKING_MISSING|ENCRYPTION_MISSING|ACCESS_CONTROL_MISSING|RETENTION_MISSING|AUDIT_LOG_MISSING|CLASSIFICATION_MISSING|N/A>","severity":"<CRITICAL|HIGH|MEDIUM|LOW>","finding":"deskripsi 1 kalimat bahasa Indonesia","recommendation":"rekomendasi 1-2 kalimat bahasa Indonesia"}'
+        '- Snowflake Time Travel & Fail-safe aktif default untuk DATA_RETENTION dasar.\n' ||
+        '- Karena itu, JANGAN tandai kolom sebagai VIOLATION untuk kategori AUDIT_TRAIL atau ENCRYPTION at-rest. Set is_violation=false dan violation_type=N/A untuk kasus tersebut.\n\n' ||
+        'ATURAN KONSISTENSI KATEGORI (WAJIB):\n' ||
+        'Finding & recommendation HARUS sesuai dengan KATEGORI regulasi. Jangan rekomendasi masking padahal pasal-nya soal retensi.\n' ||
+        '- Jika KATEGORI = DATA_MASKING / ENCRYPTION → fokus pada Dynamic Data Masking Policy / Tag-based masking.\n' ||
+        '- Jika KATEGORI = ACCESS_CONTROL → fokus pada Row Access Policy + RBAC + role least-privilege.\n' ||
+        '- Jika KATEGORI = DATA_CLASSIFICATION → fokus pada object tagging (PII, PII_FINANCIAL, dll), classification framework, semantic categories.\n' ||
+        '- Jika KATEGORI = DATA_RETENTION → fokus pada DATA_RETENTION_TIME_IN_DAYS, time travel, archival, anonymization, automated purge job. JANGAN rekomendasi masking.\n' ||
+        '- Jika KATEGORI = AUDIT_TRAIL → set is_violation=false (Snowflake built-in).\n' ||
+        '- Jika KATEGORI = NETWORK_SECURITY → fokus pada NETWORK POLICY, IP allowlist, private link.\n\n' ||
+        'Apakah kolom comply terhadap pasal ini? Asumsikan bank BELUM apply control yang relevan dengan KATEGORI di atas. Return JSON saja:\n{"is_violation":<true|false>,"violation_type":"<MASKING_MISSING|ENCRYPTION_MISSING|ACCESS_CONTROL_MISSING|RETENTION_MISSING|AUDIT_LOG_MISSING|CLASSIFICATION_MISSING|N/A>","severity":"<CRITICAL|HIGH|MEDIUM|LOW>","finding":"deskripsi 1 kalimat bahasa Indonesia, sebut nama pasal/kategori","recommendation":"rekomendasi 1-2 kalimat bahasa Indonesia, harus sesuai KATEGORI pasal di atas"}'
       ) AS llm_resp
     FROM pairs
   )
@@ -228,6 +235,18 @@ BEGIN
          RECOMMENDATION  = 'Tidak perlu tindakan: cukup pastikan SNOWFLAKE.ACCOUNT_USAGE share aktif untuk monitoring audit trail.'
    WHERE UPPER(VIOLATION_TYPE) IN ('AUDIT_LOG_MISSING','ENCRYPTION_MISSING')
       OR UPPER(REG_CATEGORY) IN ('AUDIT_TRAIL','ENCRYPTION');
+
+  -- Post-filter override: category-mismatch fix.
+  -- LLM kadang rekomendasi masking padahal pasal soal RETENTION → koreksi.
+  UPDATE COMPLIANCE_RESULTS.GAP_ANALYSIS_UC1
+     SET VIOLATION_TYPE  = 'RETENTION_MISSING',
+         FINDING         = 'Kolom ' || TABLE_NAME || '.' || COLUMN_NAME ||
+                           ' belum memiliki kebijakan retensi data eksplisit (DATA_RETENTION_TIME_IN_DAYS, archival, anonymization) sesuai ' || PASAL || ' tentang ' || REG_TITLE || '.',
+         RECOMMENDATION  = 'Tetapkan DATA_RETENTION_TIME_IN_DAYS pada tabel sesuai masa simpan minimal dari pasal, jadwalkan task untuk archival/anonymization setelah masa retensi berakhir, dan dokumentasikan kebijakan retensi per kategori data.'
+   WHERE UPPER(REG_CATEGORY) = 'DATA_RETENTION'
+     AND IS_VIOLATION = TRUE
+     AND UPPER(VIOLATION_TYPE) IN ('MASKING_MISSING','ACCESS_CONTROL_MISSING','ENCRYPTION_MISSING');
+
   RETURN 'UC1 refreshed: ' || (SELECT COUNT(*) FROM COMPLIANCE_RESULTS.GAP_ANALYSIS_UC1) || ' pairs';
 END;
 $$;
@@ -265,15 +284,25 @@ BEGIN
       SNOWFLAKE.CORTEX.COMPLETE('claude-opus-4-7',
         'Bank. Asumsikan BELUM apply masking/audit/AML controls. KOLOM: ' || TABLE_SCHEMA || '.' || TABLE_NAME || '.' || COLUMN_NAME ||
         ' (' || DATA_TYPE || ', ' || AI_CLASSIFICATION || ')\nKONTEKS: ' || AI_REASON ||
-        '\n\nREGULASI (' || REGULATION_SOURCE || ') Pasal ' || PASAL || ': ' || REG_TITLE ||
+        '\n\nREGULASI (' || REGULATION_SOURCE || ') Pasal ' || PASAL || ': ' || REG_TITLE || ' | KATEGORI: ' || REG_CATEGORY ||
         '\nIsi: ' || LEFT(REG_CONTENT,1500) ||
         '\n\nCATATAN PLATFORM (PENTING - JANGAN DILANGGAR):\n' ||
         '- Snowflake SUDAH menyediakan AUDIT TRAIL built-in (SNOWFLAKE.ACCOUNT_USAGE.ACCESS_HISTORY, QUERY_HISTORY, LOGIN_HISTORY) untuk SEMUA akses kolom/tabel tanpa konfigurasi tambahan.\n' ||
         '- Semua data terenkripsi at-rest (AES-256) dan in-transit (TLS 1.2+) by default.\n' ||
         '- Time Travel & Fail-safe aktif default → DATA_RETENTION dasar terpenuhi.\n' ||
-        '- Karena itu, JANGAN tandai sebagai VIOLATION untuk: AUDIT_TRAIL, AUDIT_LOG_MISSING, atau ENCRYPTION at-rest. Set is_violation=false untuk kasus tersebut.\n' ||
-        '- VIOLATION hanya untuk: KYC belum diverifikasi (KYC_VERIFIED=N), AML belum di-screen, masking PII belum dipasang, akses/role belum dibatasi sesuai least-privilege, atau pelaporan transaksi mencurigakan belum dijalankan.\n\n' ||
-        'Apakah kolom berkaitan & comply? Return JSON:\n{"is_violation":<true|false>,"violation_type":"<MASKING_MISSING|AUDIT_LOG_MISSING|KYC_MISSING|AML_SCREENING_MISSING|REPORTING_MISSING|ACCESS_CONTROL_MISSING|DATA_RETENTION_MISSING|N/A>","severity":"<CRITICAL|HIGH|MEDIUM|LOW>","finding":"1 kalimat bahasa Indonesia","recommendation":"remediasi 1-2 kalimat bahasa Indonesia"}'
+        '- Karena itu, JANGAN tandai sebagai VIOLATION untuk: AUDIT_TRAIL, AUDIT_LOG_MISSING, atau ENCRYPTION at-rest. Set is_violation=false untuk kasus tersebut.\n\n' ||
+        'ATURAN KONSISTENSI KATEGORI (WAJIB):\n' ||
+        'Finding & recommendation HARUS sesuai dengan KATEGORI pasal di atas. Jangan rekomendasi masking padahal pasal-nya soal retensi/AML/KYC/dll.\n' ||
+        '- DATA_MASKING / ENCRYPTION → fokus Dynamic Data Masking Policy.\n' ||
+        '- ACCESS_CONTROL → fokus Row Access Policy + RBAC + least-privilege role.\n' ||
+        '- DATA_CLASSIFICATION → fokus object tagging (PII, PII_FINANCIAL, dll), classification framework.\n' ||
+        '- DATA_RETENTION → fokus DATA_RETENTION_TIME_IN_DAYS, archival, anonymization, automated purge. JANGAN rekomendasi masking.\n' ||
+        '- KYC_AML / FRAUD_PREVENTION → fokus identity verification, AML screening (sanction list, PEP), suspicious transaction reporting.\n' ||
+        '- TRANSACTION_REPORTING / REPORTING → fokus regulatory reporting pipeline (LTKM/LTKT/SLIK), threshold alerts, scheduled task.\n' ||
+        '- SETTLEMENT_RISK / OPERATIONAL_RISK → fokus dual-control approval, settlement monitoring, exception handling.\n' ||
+        '- FOREIGN_EXCHANGE → fokus FX rate validation, threshold cross-border, BI devisa reporting.\n' ||
+        '- AUDIT_TRAIL → set is_violation=false (Snowflake built-in).\n\n' ||
+        'Apakah kolom berkaitan & comply? Return JSON:\n{"is_violation":<true|false>,"violation_type":"<MASKING_MISSING|AUDIT_LOG_MISSING|KYC_MISSING|AML_SCREENING_MISSING|REPORTING_MISSING|ACCESS_CONTROL_MISSING|DATA_RETENTION_MISSING|N/A>","severity":"<CRITICAL|HIGH|MEDIUM|LOW>","finding":"1 kalimat bahasa Indonesia, sebut nama pasal/kategori","recommendation":"remediasi 1-2 kalimat bahasa Indonesia, harus sesuai KATEGORI pasal di atas"}'
       ) AS llm_resp
     FROM pairs
   )
@@ -296,6 +325,18 @@ BEGIN
    WHERE REGULATION_SOURCE = :REG_SOURCE
      AND ( UPPER(VIOLATION_TYPE) IN ('AUDIT_LOG_MISSING','ENCRYPTION_MISSING')
         OR UPPER(REG_CATEGORY) IN ('AUDIT_TRAIL','ENCRYPTION') );
+
+  -- Post-filter override: category-mismatch fix for DATA_RETENTION pasal.
+  UPDATE COMPLIANCE_RESULTS.GAP_ANALYSIS_TRANSACTIONS
+     SET VIOLATION_TYPE  = 'RETENTION_MISSING',
+         FINDING         = 'Kolom ' || TABLE_NAME || '.' || COLUMN_NAME ||
+                           ' belum memiliki kebijakan retensi data eksplisit (DATA_RETENTION_TIME_IN_DAYS, archival, anonymization) sesuai ' || PASAL || ' tentang ' || REG_TITLE || '.',
+         RECOMMENDATION  = 'Tetapkan DATA_RETENTION_TIME_IN_DAYS pada tabel sesuai masa simpan minimal dari pasal, jadwalkan task untuk archival/anonymization setelah masa retensi berakhir.'
+   WHERE REGULATION_SOURCE = :REG_SOURCE
+     AND UPPER(REG_CATEGORY) IN ('DATA_RETENTION')
+     AND IS_VIOLATION = TRUE
+     AND UPPER(VIOLATION_TYPE) IN ('MASKING_MISSING','ACCESS_CONTROL_MISSING','ENCRYPTION_MISSING');
+
   rc := (SELECT COUNT(*) FROM COMPLIANCE_RESULTS.GAP_ANALYSIS_TRANSACTIONS WHERE REGULATION_SOURCE = :REG_SOURCE);
   RETURN 'TX gap (' || :REG_SOURCE || ') refreshed: ' || rc || ' pairs';
 END;
