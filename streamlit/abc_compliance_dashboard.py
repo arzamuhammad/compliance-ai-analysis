@@ -172,8 +172,8 @@ def kpi(label, value, sub="", color="blue"):
 def section(title):
     st.markdown(f"<div class='section-title'>{title}</div>", unsafe_allow_html=True)
 
-def render_refresh_button(uc_label: str, sp_call: str):
-    """Refresh button - calls stored procedure, then clears cache."""
+def render_refresh_button(uc_label: str, sp_call: str, extra_sp_calls: list = None):
+    """Refresh button - calls stored procedure(s), then clears cache."""
     cc1, cc2, cc3 = st.columns([0.5, 0.25, 0.25])
     with cc3:
         if st.button(f"🔄 Refresh {uc_label}", key=f"refresh_{uc_label}", type="primary", use_container_width=True):
@@ -181,6 +181,12 @@ def render_refresh_button(uc_label: str, sp_call: str):
                 try:
                     msg = call_sp(sp_call)
                     st.success(f"✅ {msg}")
+                    for chained_sp in (extra_sp_calls or []):
+                        try:
+                            chain_msg = call_sp(chained_sp)
+                            st.success(f"✅ {chain_msg}")
+                        except Exception as ce:
+                            st.warning(f"Chained SP failed ({chained_sp}): {ce}")
                     st.cache_data.clear()
                     time.sleep(1.5)
                     st.rerun()
@@ -281,10 +287,10 @@ if selected_menu == MENU_OPTIONS[0]:
 # Generic UC renderer with tabs
 # ===================================================================
 def render_uc_tabs(df_full, uc_title, uc_subtitle, refresh_label, sp_call,
-                   tables_in_scope, uc_focus_columns=None):
+                   tables_in_scope, uc_focus_columns=None, extra_sp_calls=None):
     section(uc_title)
     st.markdown(f"<p style='color:#555;'>{uc_subtitle}</p>", unsafe_allow_html=True)
-    render_refresh_button(refresh_label, sp_call)
+    render_refresh_button(refresh_label, sp_call, extra_sp_calls=extra_sp_calls)
     st.caption(f"💡 Klik **Refresh {refresh_label}** untuk menjalankan ulang analisis AI (claude-opus-4-7). "
                "Gunakan setelah Anda mengubah data tabel atau kebijakan agar dashboard merefleksikan kondisi terbaru.")
 
@@ -472,6 +478,7 @@ if selected_menu == MENU_OPTIONS[2]:
         "AI memeriksa apakah 3 tabel transaksi sudah comply dengan Kebijakan Khusus Bank ABC (SKNBI 2022 + Juklak BI-RTGS).",
         "UC2", "BTN_COMPLIANCE_AI_DEMO.COMPLIANCE_RESULTS.SP_REFRESH_TX_GAP('KEBIJAKAN_KHUSUS')",
         tables_in_scope=["TLHIST_TRANSAKSI","GOAML_ODM_TRANSAKSI","RTGS_SKNBI_PAYMENT"],
+        extra_sp_calls=["BTN_COMPLIANCE_AI_DEMO.COMPLIANCE_RESULTS.SP_REFRESH_DATA_COMPLETENESS()"],
     )
 
 # ===================================================================
@@ -484,6 +491,7 @@ if selected_menu == MENU_OPTIONS[3]:
         "AI memeriksa data 3 tabel transaksi terhadap PBI 6/8/2004, PBI 7/18/2005, PADG 08/2024.",
         "UC3", "BTN_COMPLIANCE_AI_DEMO.COMPLIANCE_RESULTS.SP_REFRESH_TX_GAP('BI_REGULATION')",
         tables_in_scope=["TLHIST_TRANSAKSI","GOAML_ODM_TRANSAKSI","RTGS_SKNBI_PAYMENT"],
+        extra_sp_calls=["BTN_COMPLIANCE_AI_DEMO.COMPLIANCE_RESULTS.SP_REFRESH_DATA_COMPLETENESS()"],
     )
 
 # ===================================================================
