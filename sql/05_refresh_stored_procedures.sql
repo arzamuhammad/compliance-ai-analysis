@@ -210,7 +210,7 @@ BEGIN
         '- Jika KATEGORI = DATA_MASKING / ENCRYPTION → fokus pada Dynamic Data Masking Policy / Tag-based masking.\n' ||
         '- Jika KATEGORI = ACCESS_CONTROL → fokus pada Row Access Policy + RBAC + role least-privilege.\n' ||
         '- Jika KATEGORI = DATA_CLASSIFICATION → fokus pada object tagging (PII, PII_FINANCIAL, dll), classification framework, semantic categories.\n' ||
-        '- Jika KATEGORI = DATA_RETENTION → fokus pada DATA_RETENTION_TIME_IN_DAYS, time travel, archival, anonymization, automated purge job. JANGAN rekomendasi masking.\n' ||
+        '- Jika KATEGORI = DATA_RETENTION → fokus pada DATA ARCHIVAL LIFECYCLE: cek apakah ada Snowflake TASK terjadwal yang memindahkan data inactive (>X tahun sesuai pasal) ke schema/database arsip terpisah (mis. CUSTOMER_DATA_ARCHIVE), atau menganonimisasi data setelah masa retensi. Time Travel (DATA_RETENTION_TIME_IN_DAYS) BUKAN archival - itu hanya recovery window. JANGAN rekomendasi masking. Rekomendasikan: scheduled archival job (TASK + COPY INTO archive schema), purge/anonymization procedure, atau external storage tiering.\n' ||
         '- Jika KATEGORI = AUDIT_TRAIL → set is_violation=false (Snowflake built-in).\n' ||
         '- Jika KATEGORI = NETWORK_SECURITY → fokus pada NETWORK POLICY, IP allowlist, private link.\n\n' ||
         'Apakah kolom comply terhadap pasal ini? Asumsikan bank BELUM apply control yang relevan dengan KATEGORI di atas. Return JSON saja:\n{"is_violation":<true|false>,"violation_type":"<MASKING_MISSING|ENCRYPTION_MISSING|ACCESS_CONTROL_MISSING|RETENTION_MISSING|AUDIT_LOG_MISSING|CLASSIFICATION_MISSING|N/A>","severity":"<CRITICAL|HIGH|MEDIUM|LOW>","finding":"deskripsi 1 kalimat bahasa Indonesia, sebut nama pasal/kategori","recommendation":"rekomendasi 1-2 kalimat bahasa Indonesia, harus sesuai KATEGORI pasal di atas"}'
@@ -241,8 +241,9 @@ BEGIN
   UPDATE COMPLIANCE_RESULTS.GAP_ANALYSIS_UC1
      SET VIOLATION_TYPE  = 'RETENTION_MISSING',
          FINDING         = 'Kolom ' || TABLE_NAME || '.' || COLUMN_NAME ||
-                           ' belum memiliki kebijakan retensi data eksplisit (DATA_RETENTION_TIME_IN_DAYS, archival, anonymization) sesuai ' || PASAL || ' tentang ' || REG_TITLE || '.',
-         RECOMMENDATION  = 'Tetapkan DATA_RETENTION_TIME_IN_DAYS pada tabel sesuai masa simpan minimal dari pasal, jadwalkan task untuk archival/anonymization setelah masa retensi berakhir, dan dokumentasikan kebijakan retensi per kategori data.'
+                           ' belum tercakup dalam data archival lifecycle policy sesuai ' || PASAL || ' tentang ' || REG_TITLE ||
+                           ' - tidak ada scheduled job yang memindahkan data inactive ke schema arsip atau melakukan anonymization setelah masa retensi.',
+         RECOMMENDATION  = 'Buat schema/database arsip terpisah (mis. CUSTOMER_DATA_ARCHIVE) dan jadwalkan Snowflake TASK harian/mingguan yang memindahkan record inactive >2 tahun ke schema tersebut, lalu DELETE dari tabel utama. Untuk data transaksi >5 tahun, lakukan anonymization PII atau pindahkan ke storage tier murah (external table). Time Travel hanya untuk recovery, bukan archival.'
    WHERE UPPER(REG_CATEGORY) = 'DATA_RETENTION'
      AND IS_VIOLATION = TRUE
      AND UPPER(VIOLATION_TYPE) IN ('MASKING_MISSING','ACCESS_CONTROL_MISSING','ENCRYPTION_MISSING');
@@ -296,7 +297,7 @@ BEGIN
         '- DATA_MASKING / ENCRYPTION → fokus Dynamic Data Masking Policy.\n' ||
         '- ACCESS_CONTROL → fokus Row Access Policy + RBAC + least-privilege role.\n' ||
         '- DATA_CLASSIFICATION → fokus object tagging (PII, PII_FINANCIAL, dll), classification framework.\n' ||
-        '- DATA_RETENTION → fokus DATA_RETENTION_TIME_IN_DAYS, archival, anonymization, automated purge. JANGAN rekomendasi masking.\n' ||
+        '- DATA_RETENTION → fokus DATA ARCHIVAL LIFECYCLE: scheduled TASK yang memindahkan data inactive (>X tahun) ke schema arsip terpisah, atau anonymization. Time Travel BUKAN archival. JANGAN rekomendasi masking.\n' ||
         '- KYC_AML / FRAUD_PREVENTION → fokus identity verification, AML screening (sanction list, PEP), suspicious transaction reporting.\n' ||
         '- TRANSACTION_REPORTING / REPORTING → fokus regulatory reporting pipeline (LTKM/LTKT/SLIK), threshold alerts, scheduled task.\n' ||
         '- SETTLEMENT_RISK / OPERATIONAL_RISK → fokus dual-control approval, settlement monitoring, exception handling.\n' ||
@@ -330,8 +331,9 @@ BEGIN
   UPDATE COMPLIANCE_RESULTS.GAP_ANALYSIS_TRANSACTIONS
      SET VIOLATION_TYPE  = 'RETENTION_MISSING',
          FINDING         = 'Kolom ' || TABLE_NAME || '.' || COLUMN_NAME ||
-                           ' belum memiliki kebijakan retensi data eksplisit (DATA_RETENTION_TIME_IN_DAYS, archival, anonymization) sesuai ' || PASAL || ' tentang ' || REG_TITLE || '.',
-         RECOMMENDATION  = 'Tetapkan DATA_RETENTION_TIME_IN_DAYS pada tabel sesuai masa simpan minimal dari pasal, jadwalkan task untuk archival/anonymization setelah masa retensi berakhir.'
+                           ' belum tercakup dalam data archival lifecycle policy sesuai ' || PASAL || ' tentang ' || REG_TITLE ||
+                           ' - tidak ada scheduled job yang memindahkan data inactive ke schema arsip atau melakukan anonymization setelah masa retensi.',
+         RECOMMENDATION  = 'Buat schema/database arsip terpisah (mis. TRANSACTION_DATA_ARCHIVE) dan jadwalkan Snowflake TASK yang memindahkan transaksi >5 tahun ke schema tersebut, lalu DELETE dari tabel utama. Untuk data transaksi sangat lama, lakukan anonymization PII atau pindahkan ke external table di object storage murah. Time Travel hanya untuk recovery, bukan archival.'
    WHERE REGULATION_SOURCE = :REG_SOURCE
      AND UPPER(REG_CATEGORY) IN ('DATA_RETENTION')
      AND IS_VIOLATION = TRUE
