@@ -205,8 +205,17 @@ def render_violations_table(df_v, severity_col="FINDING_SEVERITY"):
         if len(sub) == 0: continue
         cls = f"sev-{sev}"
         st.markdown(f"<div class='findings-block'><span class='{cls}'>● {sev}</span> <b>({len(sub)} findings)</b></div>", unsafe_allow_html=True)
-        cols_show = [c for c in ["TABLE_NAME","COLUMN_NAME","REG_ID","PASAL","REG_CATEGORY","VIOLATION_TYPE","FINDING"] if c in sub.columns]
-        st.dataframe(sub[cols_show], use_container_width=True, hide_index=True, height=min(40+30*len(sub), 320))
+        cols_show = [c for c in ["TABLE_NAME","COLUMN_NAME","REG_ID","PASAL","REG_CATEGORY","VIOLATION_TYPE","FINDING","RECOMMENDATION"] if c in sub.columns]
+        st.dataframe(
+            sub[cols_show],
+            use_container_width=True,
+            hide_index=True,
+            height=min(40+30*len(sub), 360),
+            column_config={
+                "FINDING": st.column_config.TextColumn("Finding", width="large"),
+                "RECOMMENDATION": st.column_config.TextColumn("💡 Recommendation", width="large"),
+            },
+        )
 
 # ===================================================================
 # MENU 1: SUMMARY

@@ -200,7 +200,13 @@ BEGIN
         ' (' || DATA_TYPE || ', ' || AI_CLASSIFICATION || ')\nKONTEKS: ' || AI_REASON ||
         '\n\nREGULASI Privacy - Pasal: ' || PASAL || ' | ' || REG_TITLE ||
         '\nIsi: ' || LEFT(REG_CONTENT, 1500) ||
-        '\n\nApakah kolom comply? Asumsikan bank BELUM apply masking/encryption/access control. Return JSON saja:\n{"is_violation":<true|false>,"violation_type":"<MASKING_MISSING|ENCRYPTION_MISSING|ACCESS_CONTROL_MISSING|RETENTION_MISSING|AUDIT_LOG_MISSING|CLASSIFICATION_MISSING|N/A>","severity":"<CRITICAL|HIGH|MEDIUM|LOW>","finding":"deskripsi 1 kalimat bahasa Indonesia","recommendation":"rekomendasi 1-2 kalimat bahasa Indonesia"}'
+        '\n\nCATATAN PLATFORM (PENTING - JANGAN DILANGGAR):\n' ||
+        '- Snowflake SUDAH menyediakan AUDIT TRAIL built-in melalui SNOWFLAKE.ACCOUNT_USAGE.ACCESS_HISTORY, QUERY_HISTORY, LOGIN_HISTORY untuk SEMUA query/akses tanpa konfigurasi tambahan.\n' ||
+        '- Semua data Snowflake terenkripsi at-rest (AES-256) dan in-transit (TLS 1.2+) secara default.\n' ||
+        '- Snowflake Time Travel & Fail-safe aktif default untuk DATA_RETENTION.\n' ||
+        '- Karena itu, JANGAN tandai kolom sebagai VIOLATION untuk kategori AUDIT_TRAIL, AUDIT_LOG_MISSING, atau ENCRYPTION at-rest. Set is_violation=false dan violation_type=N/A untuk kasus tersebut.\n' ||
+        '- Tandai VIOLATION HANYA jika benar-benar masking/access control/retention belum dipasang sesuai pasal.\n\n' ||
+        'Apakah kolom comply? Asumsikan bank BELUM apply masking/access control. Return JSON saja:\n{"is_violation":<true|false>,"violation_type":"<MASKING_MISSING|ENCRYPTION_MISSING|ACCESS_CONTROL_MISSING|RETENTION_MISSING|AUDIT_LOG_MISSING|CLASSIFICATION_MISSING|N/A>","severity":"<CRITICAL|HIGH|MEDIUM|LOW>","finding":"deskripsi 1 kalimat bahasa Indonesia","recommendation":"rekomendasi 1-2 kalimat bahasa Indonesia"}'
       ) AS llm_resp
     FROM pairs
   )
@@ -213,6 +219,15 @@ BEGIN
     TRIM(TRY_PARSE_JSON(REGEXP_REPLACE(REGEXP_REPLACE(llm_resp,'^[ \\n]*```(json)?',''),'```[ \\n]*$','')):recommendation::VARCHAR) AS RECOMMENDATION,
     CURRENT_TIMESTAMP() AS ANALYZED_AT
   FROM raw;
+  -- Post-filter override: Snowflake provides AUDIT TRAIL & ENCRYPTION at-rest by default
+  -- Demote any LLM-flagged AUDIT_LOG_MISSING / ENCRYPTION_MISSING findings to COMPLIANT.
+  UPDATE COMPLIANCE_RESULTS.GAP_ANALYSIS_UC1
+     SET IS_VIOLATION    = FALSE,
+         VIOLATION_TYPE  = 'N/A',
+         FINDING         = 'COMPLIANT - Snowflake menyediakan audit trail (ACCESS_HISTORY/QUERY_HISTORY) dan enkripsi at-rest (AES-256) secara built-in tanpa konfigurasi tambahan.',
+         RECOMMENDATION  = 'Tidak perlu tindakan: cukup pastikan SNOWFLAKE.ACCOUNT_USAGE share aktif untuk monitoring audit trail.'
+   WHERE UPPER(VIOLATION_TYPE) IN ('AUDIT_LOG_MISSING','ENCRYPTION_MISSING')
+      OR UPPER(REG_CATEGORY) IN ('AUDIT_TRAIL','ENCRYPTION');
   RETURN 'UC1 refreshed: ' || (SELECT COUNT(*) FROM COMPLIANCE_RESULTS.GAP_ANALYSIS_UC1) || ' pairs';
 END;
 $$;
@@ -252,7 +267,13 @@ BEGIN
         ' (' || DATA_TYPE || ', ' || AI_CLASSIFICATION || ')\nKONTEKS: ' || AI_REASON ||
         '\n\nREGULASI (' || REGULATION_SOURCE || ') Pasal ' || PASAL || ': ' || REG_TITLE ||
         '\nIsi: ' || LEFT(REG_CONTENT,1500) ||
-        '\n\nApakah kolom berkaitan & comply? Return JSON:\n{"is_violation":<true|false>,"violation_type":"<MASKING_MISSING|AUDIT_LOG_MISSING|KYC_MISSING|AML_SCREENING_MISSING|REPORTING_MISSING|ACCESS_CONTROL_MISSING|DATA_RETENTION_MISSING|N/A>","severity":"<CRITICAL|HIGH|MEDIUM|LOW>","finding":"1 kalimat bahasa Indonesia","recommendation":"remediasi 1-2 kalimat bahasa Indonesia"}'
+        '\n\nCATATAN PLATFORM (PENTING - JANGAN DILANGGAR):\n' ||
+        '- Snowflake SUDAH menyediakan AUDIT TRAIL built-in (SNOWFLAKE.ACCOUNT_USAGE.ACCESS_HISTORY, QUERY_HISTORY, LOGIN_HISTORY) untuk SEMUA akses kolom/tabel tanpa konfigurasi tambahan.\n' ||
+        '- Semua data terenkripsi at-rest (AES-256) dan in-transit (TLS 1.2+) by default.\n' ||
+        '- Time Travel & Fail-safe aktif default → DATA_RETENTION dasar terpenuhi.\n' ||
+        '- Karena itu, JANGAN tandai sebagai VIOLATION untuk: AUDIT_TRAIL, AUDIT_LOG_MISSING, atau ENCRYPTION at-rest. Set is_violation=false untuk kasus tersebut.\n' ||
+        '- VIOLATION hanya untuk: KYC belum diverifikasi (KYC_VERIFIED=N), AML belum di-screen, masking PII belum dipasang, akses/role belum dibatasi sesuai least-privilege, atau pelaporan transaksi mencurigakan belum dijalankan.\n\n' ||
+        'Apakah kolom berkaitan & comply? Return JSON:\n{"is_violation":<true|false>,"violation_type":"<MASKING_MISSING|AUDIT_LOG_MISSING|KYC_MISSING|AML_SCREENING_MISSING|REPORTING_MISSING|ACCESS_CONTROL_MISSING|DATA_RETENTION_MISSING|N/A>","severity":"<CRITICAL|HIGH|MEDIUM|LOW>","finding":"1 kalimat bahasa Indonesia","recommendation":"remediasi 1-2 kalimat bahasa Indonesia"}'
       ) AS llm_resp
     FROM pairs
   )
@@ -265,6 +286,16 @@ BEGIN
     TRIM(TRY_PARSE_JSON(REGEXP_REPLACE(REGEXP_REPLACE(llm_resp,'^[ \\n]*```(json)?',''),'```[ \\n]*$','')):recommendation::VARCHAR) AS RECOMMENDATION,
     CURRENT_TIMESTAMP() AS ANALYZED_AT
   FROM raw;
+  -- Post-filter override: Snowflake provides AUDIT TRAIL & ENCRYPTION at-rest by default
+  -- Demote any LLM-flagged AUDIT_LOG_MISSING / ENCRYPTION_MISSING for this REG_SOURCE.
+  UPDATE COMPLIANCE_RESULTS.GAP_ANALYSIS_TRANSACTIONS
+     SET IS_VIOLATION    = FALSE,
+         VIOLATION_TYPE  = 'N/A',
+         FINDING         = 'COMPLIANT - Snowflake menyediakan audit trail (ACCESS_HISTORY/QUERY_HISTORY) dan enkripsi at-rest (AES-256) secara built-in tanpa konfigurasi tambahan.',
+         RECOMMENDATION  = 'Tidak perlu tindakan: pastikan SNOWFLAKE.ACCOUNT_USAGE share aktif untuk monitoring audit trail.'
+   WHERE REGULATION_SOURCE = :REG_SOURCE
+     AND ( UPPER(VIOLATION_TYPE) IN ('AUDIT_LOG_MISSING','ENCRYPTION_MISSING')
+        OR UPPER(REG_CATEGORY) IN ('AUDIT_TRAIL','ENCRYPTION') );
   rc := (SELECT COUNT(*) FROM COMPLIANCE_RESULTS.GAP_ANALYSIS_TRANSACTIONS WHERE REGULATION_SOURCE = :REG_SOURCE);
   RETURN 'TX gap (' || :REG_SOURCE || ') refreshed: ' || rc || ' pairs';
 END;
