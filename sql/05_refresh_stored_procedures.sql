@@ -173,7 +173,41 @@ $$;
 CREATE OR REPLACE PROCEDURE COMPLIANCE_RESULTS.SP_REFRESH_UC1()
 RETURNS STRING LANGUAGE SQL EXECUTE AS CALLER AS
 $$
+DECLARE
+  TASK_LIST_QID STRING;
 BEGIN
+  -- ================================================================
+  -- STEP 0: FACTUAL RETENTION STATE (per CUSTOMER_DATA table)
+  -- Cek apakah tabel sudah punya:
+  --   1. Storage Lifecycle Policy attached (POLICY_REFERENCES)
+  --   2. Scheduled archival/purge TASK aktif (SHOW TASKS heuristic)
+  -- ================================================================
+  CREATE OR REPLACE TEMPORARY TABLE _tmp_lifecycle AS
+    SELECT 'NASABAH' AS TABLE_NAME, COUNT(*) AS N FROM TABLE(INFORMATION_SCHEMA.POLICY_REFERENCES(REF_ENTITY_NAME=>'BTN_COMPLIANCE_AI_DEMO.CUSTOMER_DATA.NASABAH', REF_ENTITY_DOMAIN=>'TABLE')) WHERE POLICY_KIND='STORAGE_LIFECYCLE_POLICY'
+    UNION ALL SELECT 'REKENING', COUNT(*) FROM TABLE(INFORMATION_SCHEMA.POLICY_REFERENCES(REF_ENTITY_NAME=>'BTN_COMPLIANCE_AI_DEMO.CUSTOMER_DATA.REKENING', REF_ENTITY_DOMAIN=>'TABLE')) WHERE POLICY_KIND='STORAGE_LIFECYCLE_POLICY'
+    UNION ALL SELECT 'KARTU_KREDIT', COUNT(*) FROM TABLE(INFORMATION_SCHEMA.POLICY_REFERENCES(REF_ENTITY_NAME=>'BTN_COMPLIANCE_AI_DEMO.CUSTOMER_DATA.KARTU_KREDIT', REF_ENTITY_DOMAIN=>'TABLE')) WHERE POLICY_KIND='STORAGE_LIFECYCLE_POLICY'
+    UNION ALL SELECT 'LOAN_APPLICATION', COUNT(*) FROM TABLE(INFORMATION_SCHEMA.POLICY_REFERENCES(REF_ENTITY_NAME=>'BTN_COMPLIANCE_AI_DEMO.CUSTOMER_DATA.LOAN_APPLICATION', REF_ENTITY_DOMAIN=>'TABLE')) WHERE POLICY_KIND='STORAGE_LIFECYCLE_POLICY';
+
+  SHOW TASKS IN DATABASE BTN_COMPLIANCE_AI_DEMO;
+  TASK_LIST_QID := LAST_QUERY_ID();
+
+  CREATE OR REPLACE TEMPORARY TABLE _tmp_archive_tasks AS
+    SELECT "name" AS TASK_NAME, "definition" AS DEF
+    FROM TABLE(RESULT_SCAN(:TASK_LIST_QID))
+    WHERE "state" = 'started'
+      AND ( UPPER("name")       RLIKE '.*(ARCHIVE|ARCHIVAL|PURGE|RETENTION|ANONYMIZE).*'
+         OR UPPER("definition") RLIKE '.*(ARCHIVE|ARCHIVAL|PURGE|ANONYMIZE).*');
+
+  CREATE OR REPLACE TEMPORARY TABLE _tmp_retention_state AS
+    SELECT lc.TABLE_NAME,
+           (lc.N > 0) AS HAS_LIFECYCLE_POLICY,
+           EXISTS(
+             SELECT 1 FROM _tmp_archive_tasks t
+             WHERE UPPER(t.DEF) LIKE '%' || UPPER(lc.TABLE_NAME) || '%'
+                OR UPPER(t.TASK_NAME) LIKE '%' || UPPER(lc.TABLE_NAME) || '%'
+           ) AS HAS_ARCHIVE_TASK
+    FROM _tmp_lifecycle lc;
+
   CREATE OR REPLACE TABLE COMPLIANCE_RESULTS.GAP_ANALYSIS_UC1 AS
   WITH cols AS (
     SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE, AI_CLASSIFICATION, AI_SENSITIVITY, RISK_LEVEL, AI_REASON, CONTAINS_PII, NEEDS_MASKING
@@ -186,8 +220,11 @@ BEGIN
   ),
   pairs AS (
     SELECT c.*, r.REG_ID, r.PASAL, r.CATEGORY AS REG_CATEGORY, r.TITLE AS REG_TITLE,
-           r.SEVERITY AS REG_SEVERITY, r.CONTENT AS REG_CONTENT, r.APPLIES_TO
+           r.SEVERITY AS REG_SEVERITY, r.CONTENT AS REG_CONTENT, r.APPLIES_TO,
+           COALESCE(rs.HAS_LIFECYCLE_POLICY, FALSE) AS HAS_LIFECYCLE_POLICY,
+           COALESCE(rs.HAS_ARCHIVE_TASK,  FALSE)   AS HAS_ARCHIVE_TASK
     FROM cols c CROSS JOIN regs r
+    LEFT JOIN _tmp_retention_state rs ON rs.TABLE_NAME = c.TABLE_NAME
     WHERE (r.CATEGORY IN ('DATA_MASKING','ENCRYPTION') AND c.NEEDS_MASKING=TRUE)
        OR (r.CATEGORY='DATA_CLASSIFICATION')
        OR (r.CATEGORY='ACCESS_CONTROL' AND c.AI_SENSITIVITY IN ('CRITICAL','HIGH'))
@@ -200,25 +237,31 @@ BEGIN
         ' (' || DATA_TYPE || ', ' || AI_CLASSIFICATION || ')\nKONTEKS: ' || AI_REASON ||
         '\n\nREGULASI Privacy - Pasal: ' || PASAL || ' | ' || REG_TITLE || ' | KATEGORI: ' || REG_CATEGORY ||
         '\nIsi: ' || LEFT(REG_CONTENT, 1500) ||
-        '\n\nCATATAN PLATFORM (PENTING - JANGAN DILANGGAR):\n' ||
-        '- Snowflake SUDAH menyediakan AUDIT TRAIL built-in melalui SNOWFLAKE.ACCOUNT_USAGE.ACCESS_HISTORY, QUERY_HISTORY, LOGIN_HISTORY untuk SEMUA query/akses tanpa konfigurasi tambahan.\n' ||
-        '- Semua data Snowflake terenkripsi at-rest (AES-256) dan in-transit (TLS 1.2+) secara default.\n' ||
-        '- Snowflake Time Travel & Fail-safe aktif default untuk DATA_RETENTION dasar.\n' ||
-        '- Karena itu, JANGAN tandai kolom sebagai VIOLATION untuk kategori AUDIT_TRAIL atau ENCRYPTION at-rest. Set is_violation=false dan violation_type=N/A untuk kasus tersebut.\n\n' ||
+        '\n\nFAKTA GOVERNANCE TABEL ' || TABLE_NAME || ' (real-time check):\n' ||
+        '- has_storage_lifecycle_policy = ' || IFF(HAS_LIFECYCLE_POLICY, 'TRUE', 'FALSE') || '\n' ||
+        '- has_archival_task            = ' || IFF(HAS_ARCHIVE_TASK,  'TRUE', 'FALSE') || '\n\n' ||
+        'CATATAN PLATFORM (PENTING - JANGAN DILANGGAR):\n' ||
+        '- Snowflake SUDAH menyediakan AUDIT TRAIL built-in (ACCESS_HISTORY, QUERY_HISTORY, LOGIN_HISTORY) tanpa konfigurasi tambahan.\n' ||
+        '- Semua data terenkripsi at-rest (AES-256) dan in-transit (TLS 1.2+) by default.\n' ||
+        '- JANGAN tandai sebagai VIOLATION untuk: AUDIT_TRAIL atau ENCRYPTION at-rest. Set is_violation=false.\n\n' ||
         'ATURAN KONSISTENSI KATEGORI (WAJIB):\n' ||
-        'Finding & recommendation HARUS sesuai dengan KATEGORI regulasi. Jangan rekomendasi masking padahal pasal-nya soal retensi.\n' ||
-        '- Jika KATEGORI = DATA_MASKING / ENCRYPTION → fokus pada Dynamic Data Masking Policy / Tag-based masking.\n' ||
-        '- Jika KATEGORI = ACCESS_CONTROL → fokus pada Row Access Policy + RBAC + role least-privilege.\n' ||
-        '- Jika KATEGORI = DATA_CLASSIFICATION → fokus pada object tagging (PII, PII_FINANCIAL, dll), classification framework, semantic categories.\n' ||
-        '- Jika KATEGORI = DATA_RETENTION → fokus pada DATA ARCHIVAL LIFECYCLE: cek apakah ada Snowflake TASK terjadwal yang memindahkan data inactive (>X tahun sesuai pasal) ke schema/database arsip terpisah (mis. CUSTOMER_DATA_ARCHIVE), atau menganonimisasi data setelah masa retensi. Time Travel (DATA_RETENTION_TIME_IN_DAYS) BUKAN archival - itu hanya recovery window. JANGAN rekomendasi masking. Rekomendasikan: scheduled archival job (TASK + COPY INTO archive schema), purge/anonymization procedure, atau external storage tiering.\n' ||
-        '- Jika KATEGORI = AUDIT_TRAIL → set is_violation=false (Snowflake built-in).\n' ||
-        '- Jika KATEGORI = NETWORK_SECURITY → fokus pada NETWORK POLICY, IP allowlist, private link.\n\n' ||
-        'Apakah kolom comply terhadap pasal ini? Asumsikan bank BELUM apply control yang relevan dengan KATEGORI di atas. Return JSON saja:\n{"is_violation":<true|false>,"violation_type":"<MASKING_MISSING|ENCRYPTION_MISSING|ACCESS_CONTROL_MISSING|RETENTION_MISSING|AUDIT_LOG_MISSING|CLASSIFICATION_MISSING|N/A>","severity":"<CRITICAL|HIGH|MEDIUM|LOW>","finding":"deskripsi 1 kalimat bahasa Indonesia, sebut nama pasal/kategori","recommendation":"rekomendasi 1-2 kalimat bahasa Indonesia, harus sesuai KATEGORI pasal di atas"}'
+        '- DATA_MASKING / ENCRYPTION → Dynamic Data Masking Policy / Tag-based masking.\n' ||
+        '- ACCESS_CONTROL → Row Access Policy + RBAC + role least-privilege.\n' ||
+        '- DATA_CLASSIFICATION → object tagging (PII, PII_FINANCIAL), classification framework.\n' ||
+        '- DATA_RETENTION → cek 2 hal yang sudah disediakan di atas:\n' ||
+        '    (a) STORAGE LIFECYCLE POLICY (CREATE STORAGE LIFECYCLE POLICY ... ALTER TABLE ADD STORAGE LIFECYCLE POLICY) yang auto-archive ke tier COOL/COLD atau auto-expire.\n' ||
+        '    (b) Snowflake TASK terjadwal yang memindahkan data inactive ke archive schema atau anonimisasi.\n' ||
+        '  KEPUTUSAN: jika has_storage_lifecycle_policy=TRUE ATAU has_archival_task=TRUE → COMPLIANT (is_violation=false). Jika KEDUANYA FALSE → VIOLATION dengan rekomendasi 2 opsi tersebut.\n' ||
+        '  Time Travel BUKAN archival - itu hanya recovery window. JANGAN sebut DATA_RETENTION_TIME_IN_DAYS.\n' ||
+        '- AUDIT_TRAIL → set is_violation=false (Snowflake built-in).\n' ||
+        '- NETWORK_SECURITY → NETWORK POLICY, IP allowlist, private link.\n\n' ||
+        'Apakah kolom comply terhadap pasal ini? Return JSON saja:\n{"is_violation":<true|false>,"violation_type":"<MASKING_MISSING|ENCRYPTION_MISSING|ACCESS_CONTROL_MISSING|RETENTION_MISSING|AUDIT_LOG_MISSING|CLASSIFICATION_MISSING|N/A>","severity":"<CRITICAL|HIGH|MEDIUM|LOW>","finding":"deskripsi 1 kalimat bahasa Indonesia, sebut nama pasal/kategori","recommendation":"rekomendasi 1-2 kalimat bahasa Indonesia, harus sesuai KATEGORI pasal di atas"}'
       ) AS llm_resp
     FROM pairs
   )
   SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE, AI_CLASSIFICATION, AI_SENSITIVITY, RISK_LEVEL,
     REG_ID, PASAL, REG_CATEGORY, REG_TITLE, REG_SEVERITY,
+    HAS_LIFECYCLE_POLICY, HAS_ARCHIVE_TASK,
     COALESCE(TRY_PARSE_JSON(REGEXP_REPLACE(REGEXP_REPLACE(llm_resp,'^[ \\n]*```(json)?',''),'```[ \\n]*$','')):is_violation::BOOLEAN, FALSE) AS IS_VIOLATION,
     TRIM(TRY_PARSE_JSON(REGEXP_REPLACE(REGEXP_REPLACE(llm_resp,'^[ \\n]*```(json)?',''),'```[ \\n]*$','')):violation_type::VARCHAR) AS VIOLATION_TYPE,
     TRIM(TRY_PARSE_JSON(REGEXP_REPLACE(REGEXP_REPLACE(llm_resp,'^[ \\n]*```(json)?',''),'```[ \\n]*$','')):severity::VARCHAR) AS FINDING_SEVERITY,
@@ -226,8 +269,8 @@ BEGIN
     TRIM(TRY_PARSE_JSON(REGEXP_REPLACE(REGEXP_REPLACE(llm_resp,'^[ \\n]*```(json)?',''),'```[ \\n]*$','')):recommendation::VARCHAR) AS RECOMMENDATION,
     CURRENT_TIMESTAMP() AS ANALYZED_AT
   FROM raw;
-  -- Post-filter override: Snowflake provides AUDIT TRAIL & ENCRYPTION at-rest by default
-  -- Demote any LLM-flagged AUDIT_LOG_MISSING / ENCRYPTION_MISSING findings to COMPLIANT.
+
+  -- Post-filter A: AUDIT/ENCRYPTION → COMPLIANT (Snowflake built-in)
   UPDATE COMPLIANCE_RESULTS.GAP_ANALYSIS_UC1
      SET IS_VIOLATION    = FALSE,
          VIOLATION_TYPE  = 'N/A',
@@ -236,17 +279,37 @@ BEGIN
    WHERE UPPER(VIOLATION_TYPE) IN ('AUDIT_LOG_MISSING','ENCRYPTION_MISSING')
       OR UPPER(REG_CATEGORY) IN ('AUDIT_TRAIL','ENCRYPTION');
 
-  -- Post-filter override: category-mismatch fix.
-  -- LLM kadang rekomendasi masking padahal pasal soal RETENTION → koreksi.
+  -- Post-filter B: DATA_RETENTION dengan retention state aktual
+  -- B1: salah satu retention control aktif → COMPLIANT
   UPDATE COMPLIANCE_RESULTS.GAP_ANALYSIS_UC1
-     SET VIOLATION_TYPE  = 'RETENTION_MISSING',
-         FINDING         = 'Kolom ' || TABLE_NAME || '.' || COLUMN_NAME ||
-                           ' belum tercakup dalam data archival lifecycle policy sesuai ' || PASAL || ' tentang ' || REG_TITLE ||
-                           ' - tidak ada scheduled job yang memindahkan data inactive ke schema arsip atau melakukan anonymization setelah masa retensi.',
-         RECOMMENDATION  = 'Buat schema/database arsip terpisah (mis. CUSTOMER_DATA_ARCHIVE) dan jadwalkan Snowflake TASK harian/mingguan yang memindahkan record inactive >2 tahun ke schema tersebut, lalu DELETE dari tabel utama. Untuk data transaksi >5 tahun, lakukan anonymization PII atau pindahkan ke storage tier murah (external table). Time Travel hanya untuk recovery, bukan archival.'
+     SET IS_VIOLATION    = FALSE,
+         VIOLATION_TYPE  = 'N/A',
+         FINDING         = 'COMPLIANT - Tabel ' || TABLE_NAME ||
+                           ' sudah punya kontrol retensi: ' ||
+                           IFF(HAS_LIFECYCLE_POLICY, 'Storage Lifecycle Policy attached', '') ||
+                           IFF(HAS_LIFECYCLE_POLICY AND HAS_ARCHIVE_TASK, ' + ', '') ||
+                           IFF(HAS_ARCHIVE_TASK, 'Scheduled archival TASK aktif', '') || '.',
+         RECOMMENDATION  = 'Tidak perlu tindakan tambahan. Pastikan policy/task tetap aktif dan threshold retensi (mis. 2 tahun untuk data nasabah inactive) sesuai pasal regulasi.'
    WHERE UPPER(REG_CATEGORY) = 'DATA_RETENTION'
-     AND IS_VIOLATION = TRUE
-     AND UPPER(VIOLATION_TYPE) IN ('MASKING_MISSING','ACCESS_CONTROL_MISSING','ENCRYPTION_MISSING');
+     AND (HAS_LIFECYCLE_POLICY = TRUE OR HAS_ARCHIVE_TASK = TRUE);
+
+  -- B2: tidak ada satupun → VIOLATION dengan rekomendasi 2 opsi
+  UPDATE COMPLIANCE_RESULTS.GAP_ANALYSIS_UC1
+     SET IS_VIOLATION    = TRUE,
+         VIOLATION_TYPE  = 'RETENTION_MISSING',
+         FINDING         = 'Tabel ' || TABLE_NAME ||
+                           ' tidak memiliki Storage Lifecycle Policy maupun scheduled archival TASK, sehingga kolom ' || COLUMN_NAME ||
+                           ' melanggar ' || PASAL || ' tentang ' || REG_TITLE || '.',
+         RECOMMENDATION  = 'Pilih salah satu pendekatan: '
+                           || '(1) Apply STORAGE LIFECYCLE POLICY pada tabel - CREATE STORAGE LIFECYCLE POLICY <name> EXPRESSION (CREATED_AT < DATEADD(YEAR,-2,CURRENT_DATE())) ARCHIVE_FOR_DAYS=180 TIER=COLD; lalu ALTER TABLE ' || TABLE_NAME || ' ADD STORAGE LIFECYCLE POLICY <name>. '
+                           || 'ATAU (2) Buat schema arsip terpisah (CUSTOMER_DATA_ARCHIVE) + Snowflake TASK harian yang COPY INTO archive lalu DELETE record inactive >2 tahun dari tabel utama, plus stored procedure untuk anonimisasi PII setelah masa retensi berakhir.'
+   WHERE UPPER(REG_CATEGORY) = 'DATA_RETENTION'
+     AND HAS_LIFECYCLE_POLICY = FALSE
+     AND HAS_ARCHIVE_TASK     = FALSE;
+
+  DROP TABLE IF EXISTS _tmp_lifecycle;
+  DROP TABLE IF EXISTS _tmp_archive_tasks;
+  DROP TABLE IF EXISTS _tmp_retention_state;
 
   RETURN 'UC1 refreshed: ' || (SELECT COUNT(*) FROM COMPLIANCE_RESULTS.GAP_ANALYSIS_UC1) || ' pairs';
 END;
