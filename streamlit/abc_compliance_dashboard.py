@@ -107,8 +107,7 @@ MENU_OPTIONS = [
     "📋 3. UC2 - Kebijakan Khusus",
     "🏛️ 4. UC3 - Peraturan BI",
     "⚖️ 5. UC4 - Kebijakan VS BI",
-    "🧪 6. UC5 - Negative Test Validation",
-    "🔬 7. Adhoc Analytics",
+    "🔬 6. Adhoc Analytics",
 ]
 with st.sidebar:
     st.markdown("# 🏦 ABC")
@@ -202,6 +201,7 @@ VIOLATION_TYPE_LABEL = {
     "RETENTION_MISSING":      "Kebijakan retensi / archival lifecycle tidak ada",
     "DATA_RETENTION_MISSING": "Kebijakan retensi data belum diterapkan",
     "DATA_INCOMPLETE":        "Data wajib tidak terisi (NULL / empty rate tinggi)",
+    "DATA_VALIDATION_FAILURE": "Pelanggaran validasi data transaksi (data tidak konsisten / tidak lengkap)",
     "N/A":                    "—",
 }
 def _viol_label(code):
@@ -309,8 +309,8 @@ def render_violations_table(df_v, severity_col="FINDING_SEVERITY"):
         if len(sub) == 0: continue
         cls = f"sev-{sev}"
         st.markdown(f"<div class='findings-block'><span class='{cls}'>● {sev}</span> <b>({len(sub)} findings)</b> · <span style='color:#888;font-size:12px;'>hover REG_ID untuk lihat isi regulasi</span></div>", unsafe_allow_html=True)
-        cols_show = [c for c in ["TABLE_NAME","COLUMN_NAME","REG_ID","PASAL","REG_CATEGORY","VIOLATION_TYPE","FINDING","RECOMMENDATION"] if c in sub.columns]
-        st.markdown(df_to_html_with_reg_tooltip(sub[cols_show], max_height=380), unsafe_allow_html=True)
+        cols_show = [c for c in ["TABLE_NAME","COLUMN_NAME","REG_ID","PASAL","REG_TITLE","VIOLATION_TYPE","VIOLATING_ROWS","TOTAL_ROWS","VIOLATION_PCT","FINDING","RECOMMENDATION","SAMPLE_TX_IDS"] if c in sub.columns]
+        st.markdown(df_to_html_with_reg_tooltip(sub[cols_show], max_height=420), unsafe_allow_html=True)
 
 # ===================================================================
 # MENU 1: SUMMARY
@@ -640,74 +640,9 @@ if selected_menu == MENU_OPTIONS[4]:
             unsafe_allow_html=True)
 
 # ===================================================================
-# MENU 6: UC5 - NEGATIVE TEST VALIDATION (partner methodology)
+# MENU 6: ADHOC ANALYTICS
 # ===================================================================
 if selected_menu == MENU_OPTIONS[5]:
-    section("🧪 Use Case 5: Negative Test Validation")
-    st.markdown(
-        "Validasi data transaksi terhadap **15 NEG test cases** yang dirancang oleh partner "
-        "(`RTGS_NegativeTestCase_QA.xlsx` + `RTGS_PasalTraceability_Guide.xlsx`). "
-        "Setiap rule di-translate AI menjadi SQL predicate, lalu dijalankan langsung ke "
-        "tabel transaksi untuk mengukur **berapa baris aktual yang melanggar**."
-    )
-
-    @st.cache_data(ttl=300)
-    def _neg_load():
-        try:
-            return run_query_nocache(f"SELECT * FROM {DB}.COMPLIANCE_RESULTS.NEGATIVE_TEST_FINDINGS ORDER BY VIOLATING_ROWS DESC")
-        except Exception:
-            return pd.DataFrame()
-
-    df_neg = _neg_load()
-    df_neg_v = df_neg[df_neg.get("IS_VIOLATION", False) == True] if len(df_neg) else df_neg
-
-    cc1, cc2, cc3 = st.columns([0.5, 0.25, 0.25])
-    with cc3:
-        if st.button("🔄 Refresh UC5", key="refresh_uc5", type="primary", use_container_width=True):
-            with st.spinner("Re-generate predicates + run tests (claude-opus-4-7)..."):
-                try:
-                    msg1 = call_sp(f"{DB}.COMPLIANCE_RESULTS.SP_RUN_NEGATIVE_TESTS()")
-                    st.success(f"✅ {msg1}")
-                    st.cache_data.clear(); time.sleep(1); st.rerun()
-                except Exception as e:
-                    st.error(f"Refresh gagal: {e}")
-
-    if len(df_neg) == 0:
-        st.warning("Belum ada hasil. Klik Refresh UC5 untuk menjalankan validasi.")
-    else:
-        c1, c2, c3, c4 = st.columns(4)
-        kpi("Total Rules", df_neg["NEG_CODE"].nunique() if len(df_neg) else 0, "15 NEG cases", "blue")
-        with c1: kpi("Total Tests", len(df_neg), "(NEG × table)", "blue")
-        with c2: kpi("Violations", len(df_neg_v), "rule x table dgn isu", "red")
-        with c3: kpi("Critical", int((df_neg_v["FINDING_SEVERITY"]=='CRITICAL').sum()), ">=30% baris bermasalah", "red")
-        with c4: kpi("High", int((df_neg_v["FINDING_SEVERITY"]=='HIGH').sum()), ">=5% baris bermasalah", "gold")
-
-        st.markdown("### 📋 Detailed Findings (per NEG x table)")
-        st.caption("💡 Hover NEG_CODE / PASAL untuk lihat rule lengkap. SAMPLE_TX_IDS adalah baris baris violation aktual.")
-        cols_show = [c for c in ["NEG_CODE","TABLE_NAME","RULE_TITLE","PASAL_REFERENCE","VIOLATING_ROWS","TOTAL_ROWS","VIOLATION_PCT","FINDING_SEVERITY","GENERATED_SQL_PREDICATE","SAMPLE_TX_IDS","RECOMMENDATION"] if c in df_neg.columns]
-        st.dataframe(
-            df_neg[cols_show],
-            use_container_width=True, hide_index=True, height=480,
-            column_config={
-                "VIOLATION_PCT": st.column_config.ProgressColumn(format="%.2f%%", min_value=0, max_value=100),
-                "GENERATED_SQL_PREDICATE": st.column_config.TextColumn("AI-Generated SQL Predicate", width="medium"),
-                "SAMPLE_TX_IDS": st.column_config.TextColumn("Sample TX IDs (10)", width="medium"),
-                "RECOMMENDATION": st.column_config.TextColumn("💡 Recommendation", width="large"),
-            },
-        )
-
-        st.markdown("---")
-        st.markdown("### 📚 Pasal Traceability Reference")
-        try:
-            df_neg_rules = run_query_nocache(f"SELECT * FROM {DB}.COMPLIANCE_DOCS.NEGATIVE_TEST_RULES ORDER BY NEG_CODE")
-            st.dataframe(df_neg_rules, use_container_width=True, hide_index=True, height=400)
-        except Exception:
-            pass
-
-# ===================================================================
-# MENU 7: ADHOC ANALYTICS
-# ===================================================================
-if selected_menu == MENU_OPTIONS[6]:
     section("🔬 Adhoc Compliance Analytics")
     st.markdown("Pilih tabel mana saja di account ini, pilih regulasi, lalu jalankan analisis AI compliance secara on-the-fly dengan **Snowflake Cortex (claude-opus-4-7)**.")
 
