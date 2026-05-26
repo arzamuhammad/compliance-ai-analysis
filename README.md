@@ -19,7 +19,7 @@ Streamlit-in-Snowflake dashboard.
 |---|---|
 | **Sources** | Privacy regulation PDF, internal policies (DOCX), regulator rules (PDF), sample transaction data (CSV) |
 | **Ingestion & Stage** | Internal stage `DOCS_STAGE` + `SNOWFLAKE.CORTEX.PARSE_DOCUMENT` to extract text from PDF & DOCX |
-| **AI Layer** | Cortex AISQL (`claude-opus-4-7`) for classification & gap reasoning, Cortex Search for RAG, 5 Stored Procedures to make the pipeline idempotent |
+| **AI Layer** | Cortex AISQL (`claude-opus-4-7`) for classification & gap reasoning, Cortex Search for RAG. SPs include `SP_EXTRACT_REGULATIONS_V2` (chunked extraction, 8K char + 500 overlap), `SP_REFRESH_AI_CLASSIFICATION`, `SP_REFRESH_UC1`, `SP_REFRESH_TX_GAP`, `SP_REFRESH_UC4`, `SP_REFRESH_DATA_COMPLETENESS`, `SP_RUN_NEGATIVE_TESTS`, `SP_POPULATE_UC1_SAMPLES`, `SP_POPULATE_TX_SAMPLES` |
 | **Storage** | One database, four schemas: `CUSTOMER_DATA`, `TRANSACTION_DATA`, `COMPLIANCE_DOCS`, `COMPLIANCE_RESULTS` |
 | **Consumption** | Streamlit dashboard with sidebar menu, multi-tab insights per use case, and a "Refresh" button per UC |
 
@@ -91,7 +91,7 @@ compliance-ai-analysis/
 --   WH:  COMPLIANCE_POC (XS, auto-suspend 60s)
 --   Schemas: CUSTOMER_DATA, TRANSACTION_DATA, COMPLIANCE_DOCS, COMPLIANCE_RESULTS
 --   Tables:  customer master, accounts, credit cards, loan applications,
---            and 3 transaction tables (10K synthetic rows each)
+--            and 3 transaction tables (1K synthetic rows each — reduced from 10K untuk hemat credit)
 ```
 
 > The script uses `TABLE(GENERATOR(...))` + `UNIFORM` to build synthetic data — no
