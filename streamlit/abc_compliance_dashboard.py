@@ -162,6 +162,103 @@ df_tabs, df_rows = D["tables_summary"], D["row_counts"]
 df_uc2 = df_tx[df_tx["REGULATION_SOURCE"] == "KEBIJAKAN_KHUSUS"]
 df_uc3 = df_tx[df_tx["REGULATION_SOURCE"] == "BI_REGULATION"]
 
+# ---------------------------------------------------------------
+# REG_ID tooltip helper - hover di REG_ID -> tampilkan isi regulasi
+# ---------------------------------------------------------------
+def _build_reg_lookup(_df_regs):
+    out = {}
+    for _, r in _df_regs.iterrows():
+        rid = str(r.get("REG_ID","") or "").strip()
+        if not rid: continue
+        title = str(r.get("TITLE","") or "").strip()
+        pasal = str(r.get("PASAL","") or "").strip()
+        cat   = str(r.get("CATEGORY","") or "").strip()
+        sev   = str(r.get("SEVERITY","") or "").strip()
+        regnm = str(r.get("REGULATION_NAME","") or "").strip()
+        content = str(r.get("CONTENT","") or "").strip()
+        if len(content) > 800: content = content[:800] + "..."
+        parts = [f"[{rid}] {title}"]
+        if regnm: parts.append(f"Sumber: {regnm}")
+        if pasal: parts.append(f"Pasal: {pasal}")
+        if cat:   parts.append(f"Kategori: {cat}")
+        if sev:   parts.append(f"Severity: {sev}")
+        parts.append(""); parts.append(content)
+        out[rid] = "\n".join(parts)
+    return out
+REG_LOOKUP = _build_reg_lookup(df_regs)
+
+# ---------------------------------------------------------------
+# VIOLATION_TYPE -> deskripsi Indonesia (NEG-style readable)
+# ---------------------------------------------------------------
+VIOLATION_TYPE_LABEL = {
+    "MASKING_MISSING":        "Masking Policy belum dipasang pada kolom sensitif",
+    "ACCESS_CONTROL_MISSING": "Pembatasan akses kolom belum diterapkan (RBAC/Row Access Policy)",
+    "AUDIT_LOG_MISSING":      "Audit trail belum diaktifkan",
+    "ENCRYPTION_MISSING":     "Enkripsi at-rest belum diterapkan",
+    "CLASSIFICATION_MISSING": "Tag / klasifikasi data belum dipasang",
+    "KYC_MISSING":            "Verifikasi KYC nasabah belum lengkap",
+    "AML_SCREENING_MISSING":  "AML screening belum dijalankan",
+    "REPORTING_MISSING":      "Pelaporan regulator belum dijalankan (LTKM/LTKT/SLIK)",
+    "RETENTION_MISSING":      "Kebijakan retensi / archival lifecycle tidak ada",
+    "DATA_RETENTION_MISSING": "Kebijakan retensi data belum diterapkan",
+    "DATA_INCOMPLETE":        "Data wajib tidak terisi (NULL / empty rate tinggi)",
+    "N/A":                    "—",
+}
+def _viol_label(code):
+    if code is None: return "—"
+    try:
+        if pd.isna(code): return "—"
+    except Exception: pass
+    s = str(code).strip().upper()
+    return VIOLATION_TYPE_LABEL.get(s, s.replace("_"," ").title())
+
+def _esc(v):
+    if v is None: return ""
+    s = str(v)
+    return (s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+              .replace('"',"&quot;").replace("\n"," "))
+
+def df_to_html_with_reg_tooltip(df, reg_id_cols=("REG_ID","BI_REG_ID","MATCHING_KEB_ID"),
+                                 viol_type_cols=("VIOLATION_TYPE",), max_height=380):
+    """DataFrame -> HTML table. Cells in reg_id_cols mendapat tooltip isi regulasi.
+    Cells in viol_type_cols di-translate ke deskripsi Bahasa Indonesia."""
+    cols = [c for c in df.columns]
+    th = "".join(f"<th>{_esc(c)}</th>" for c in cols)
+    body = []
+    for _, row in df.iterrows():
+        cells = []
+        for c in cols:
+            v = row[c]
+            try:
+                if pd.isna(v): cells.append("<td></td>"); continue
+            except Exception: pass
+            txt = _esc(v)
+            if c in reg_id_cols:
+                key = str(v).strip()
+                tip = REG_LOOKUP.get(key)
+                if tip:
+                    cells.append(
+                        f'<td><span title="{_esc(tip)}" style="border-bottom:1px dotted #888;cursor:help;color:{ABC_BLUE};font-weight:600;">{txt}</span></td>'
+                    )
+                else:
+                    cells.append(f"<td>{txt}</td>")
+            elif c in viol_type_cols:
+                label = _viol_label(v)
+                cells.append(f'<td><span title="Code: {txt}" style="cursor:help;">{_esc(label)}</span></td>')
+            else:
+                cells.append(f"<td>{txt}</td>")
+        body.append("<tr>" + "".join(cells) + "</tr>")
+    style = ("<style>"
+        ".reg-tip-table{border-collapse:collapse;width:100%;font-size:13px;}"
+        ".reg-tip-table th,.reg-tip-table td{border:1px solid #e1e8ed;padding:6px 8px;text-align:left;vertical-align:top;white-space:normal;}"
+        f".reg-tip-table th{{background:{ABC_BG};color:{ABC_DARK_BLUE};font-weight:700;position:sticky;top:0;}}"
+        ".reg-tip-table tr:nth-child(even){background:#fafbfc;}"
+        "</style>")
+    return (style +
+        f'<div style="max-height:{max_height}px;overflow:auto;border:1px solid #e1e8ed;border-radius:6px;">'
+        f'<table class="reg-tip-table"><thead><tr>{th}</tr></thead><tbody>'
+        + "".join(body) + "</tbody></table></div>")
+
 # -------------------------------------------------------------------
 # Helpers
 # -------------------------------------------------------------------
@@ -211,18 +308,9 @@ def render_violations_table(df_v, severity_col="FINDING_SEVERITY"):
         sub = df_v[df_v[severity_col] == sev]
         if len(sub) == 0: continue
         cls = f"sev-{sev}"
-        st.markdown(f"<div class='findings-block'><span class='{cls}'>● {sev}</span> <b>({len(sub)} findings)</b></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='findings-block'><span class='{cls}'>● {sev}</span> <b>({len(sub)} findings)</b> · <span style='color:#888;font-size:12px;'>hover REG_ID untuk lihat isi regulasi</span></div>", unsafe_allow_html=True)
         cols_show = [c for c in ["TABLE_NAME","COLUMN_NAME","REG_ID","PASAL","REG_CATEGORY","VIOLATION_TYPE","FINDING","RECOMMENDATION"] if c in sub.columns]
-        st.dataframe(
-            sub[cols_show],
-            use_container_width=True,
-            hide_index=True,
-            height=min(40+30*len(sub), 360),
-            column_config={
-                "FINDING": st.column_config.TextColumn("Finding", width="large"),
-                "RECOMMENDATION": st.column_config.TextColumn("💡 Recommendation", width="large"),
-            },
-        )
+        st.markdown(df_to_html_with_reg_tooltip(sub[cols_show], max_height=380), unsafe_allow_html=True)
 
 # ===================================================================
 # MENU 1: SUMMARY
@@ -374,12 +462,10 @@ def render_uc_tabs(df_full, uc_title, uc_subtitle, refresh_label, sp_call,
         per_reg["COMPLIANT_COUNT"] = per_reg["TOTAL_CHECKS"] - per_reg["VIOLATION_COUNT"]
         per_reg["SCORE_PCT"] = (per_reg["COMPLIANT_COUNT"]/per_reg["TOTAL_CHECKS"]*100).round(1)
         per_reg = per_reg.sort_values("VIOLATION_COUNT", ascending=False)
-        st.dataframe(per_reg.rename(columns={
-            "REG_ID":"Reg ID","REG_TITLE":"Regulation Title","REG_CATEGORY":"Category",
-            "REG_SEVERITY":"Severity","TOTAL_CHECKS":"Total Checks","VIOLATION_COUNT":"Violations",
-            "COMPLIANT_COUNT":"Compliant","SCORE_PCT":"Score %"}),
-            use_container_width=True, hide_index=True,
-            column_config={"Score %": st.column_config.ProgressColumn(format="%.1f%%", min_value=0, max_value=100)})
+        st.caption("💡 Hover REG_ID untuk lihat isi regulasi lengkap.")
+        per_reg_show = per_reg[["REG_ID","REG_TITLE","REG_CATEGORY","REG_SEVERITY","TOTAL_CHECKS","VIOLATION_COUNT","COMPLIANT_COUNT","SCORE_PCT"]].copy()
+        per_reg_show["SCORE_PCT"] = per_reg_show["SCORE_PCT"].astype(str) + "%"
+        st.markdown(df_to_html_with_reg_tooltip(per_reg_show, max_height=400), unsafe_allow_html=True)
 
         st.markdown("---")
         st.markdown("**Pilih Regulasi untuk Detail:**")
@@ -397,8 +483,11 @@ def render_uc_tabs(df_full, uc_title, uc_subtitle, refresh_label, sp_call,
                     st.markdown(f"<div class='findings-block'><b>Isi Peraturan:</b><br><span style='color:#444'>{rr['CONTENT']}</span></div>", unsafe_allow_html=True)
             df_rv = df_full[(df_full["REG_ID"]==sel_id) & (df_full["IS_VIOLATION"])]
             st.markdown(f"### Violations - {sel_id}")
-            cols_show = [c for c in ["TABLE_NAME","COLUMN_NAME","VIOLATION_TYPE","FINDING_SEVERITY","FINDING","RECOMMENDATION"] if c in df_rv.columns]
-            st.dataframe(df_rv[cols_show], use_container_width=True, hide_index=True)
+            cols_show = [c for c in ["TABLE_NAME","COLUMN_NAME","REG_ID","VIOLATION_TYPE","FINDING_SEVERITY","FINDING","RECOMMENDATION"] if c in df_rv.columns]
+            df_rv_show = df_rv[cols_show].copy()
+            if "REG_ID" not in df_rv_show.columns and len(df_rv_show)>0:
+                df_rv_show.insert(0, "REG_ID", sel_id)
+            st.markdown(df_to_html_with_reg_tooltip(df_rv_show, max_height=420), unsafe_allow_html=True)
 
     # --------- TAB AI CLASSIFICATION ---------
     with t4:
@@ -535,7 +624,8 @@ if selected_menu == MENU_OPTIONS[4]:
 
     with t2:
         df_gap = df_uc4[df_uc4["COVERAGE_QUALITY"]!="FULL"][["BI_REG_ID","BI_PASAL","BI_CATEGORY","BI_TITLE","BI_SEVERITY","COVERAGE_QUALITY","MATCHING_KEB_ID","GAP_FINDING","RECOMMENDATION"]]
-        st.dataframe(df_gap, use_container_width=True, hide_index=True)
+        st.caption("💡 Hover BI_REG_ID atau MATCHING_KEB_ID untuk lihat isi regulasi lengkap.")
+        st.markdown(df_to_html_with_reg_tooltip(df_gap, max_height=460), unsafe_allow_html=True)
 
     with t3:
         sev_f = st.multiselect("Filter BI Severity:", ["CRITICAL","HIGH","MEDIUM","LOW"], default=["CRITICAL","HIGH"], key="uc4_sev")
