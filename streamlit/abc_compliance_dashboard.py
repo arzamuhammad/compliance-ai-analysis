@@ -309,7 +309,7 @@ def render_violations_table(df_v, severity_col="FINDING_SEVERITY"):
         if len(sub) == 0: continue
         cls = f"sev-{sev}"
         st.markdown(f"<div class='findings-block'><span class='{cls}'>● {sev}</span> <b>({len(sub)} findings)</b> · <span style='color:#888;font-size:12px;'>hover REG_ID untuk lihat isi regulasi</span></div>", unsafe_allow_html=True)
-        cols_show = [c for c in ["TABLE_NAME","COLUMN_NAME","REG_ID","PASAL","REG_TITLE","VIOLATION_TYPE","VIOLATING_ROWS","TOTAL_ROWS","VIOLATION_PCT","FINDING","RECOMMENDATION","SAMPLE_TX_IDS"] if c in sub.columns]
+        cols_show = [c for c in ["TABLE_NAME","COLUMN_NAME","REG_ID","PASAL","REG_TITLE","VIOLATION_TYPE","FINDING","RECOMMENDATION","SAMPLE_TX_IDS"] if c in sub.columns]
         st.markdown(df_to_html_with_reg_tooltip(sub[cols_show], max_height=420), unsafe_allow_html=True)
 
 # ===================================================================
