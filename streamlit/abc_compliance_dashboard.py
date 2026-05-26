@@ -96,7 +96,7 @@ def call_sp(sp_call: str):
         return session.sql(f"CALL {sp_call}").collect()[0][0]
     return conn.query(f"CALL {sp_call}").iloc[0,0]
 
-DB = "BTN_COMPLIANCE_AI_DEMO"
+DB = "BANK_ABC_COMPLIANCE_AI_DEMO"
 
 # -------------------------------------------------------------------
 # Sidebar
@@ -107,19 +107,20 @@ MENU_OPTIONS = [
     "📋 3. UC2 - Kebijakan Khusus",
     "🏛️ 4. UC3 - Peraturan BI",
     "⚖️ 5. UC4 - Kebijakan VS BI",
-    "🔬 6. Adhoc Analytics",
+    "🧪 6. UC5 - Negative Test Validation",
+    "🔬 7. Adhoc Analytics",
 ]
 with st.sidebar:
     st.markdown("# 🏦 ABC")
     st.markdown("### Compliance AI")
-    st.markdown("Bank Tabungan Negara")
+    st.markdown("Bank ABC")
     st.markdown("---")
     st.markdown("### 📍 Navigasi")
     selected_menu = st.radio("Menu", MENU_OPTIONS, label_visibility="collapsed")
     st.markdown("---")
     st.markdown("**Powered by:** Snowflake Cortex AI")
     st.markdown("**Model:** `claude-opus-4-7`")
-    st.markdown("**Database:** `BTN_COMPLIANCE_AI_DEMO`")
+    st.markdown("**Database:** `BANK_ABC_COMPLIANCE_AI_DEMO`")
 
 # Header
 ch1, ch2 = st.columns([0.8, 0.2])
@@ -158,83 +159,6 @@ D = load_all()
 df_regs, df_cls = D["regs"], D["cls"]
 df_uc1, df_tx, df_uc4 = D["uc1"], D["tx"], D["uc4"]
 df_tabs, df_rows = D["tables_summary"], D["row_counts"]
-
-# ---------------------------------------------------------------
-# REG_ID tooltip helper - hover di REG_ID -> tampilkan isi regulasi
-# ---------------------------------------------------------------
-def _build_reg_lookup(_df_regs):
-    out = {}
-    for _, r in _df_regs.iterrows():
-        rid = str(r.get("REG_ID", "") or "").strip()
-        if not rid:
-            continue
-        title = str(r.get("TITLE", "") or "").strip()
-        pasal = str(r.get("PASAL", "") or "").strip()
-        cat   = str(r.get("CATEGORY", "") or "").strip()
-        sev   = str(r.get("SEVERITY", "") or "").strip()
-        regnm = str(r.get("REGULATION_NAME", "") or "").strip()
-        content = str(r.get("CONTENT", "") or "").strip()
-        if len(content) > 800:
-            content = content[:800] + "..."
-        parts = [f"[{rid}] {title}"]
-        if regnm: parts.append(f"Sumber: {regnm}")
-        if pasal: parts.append(f"Pasal: {pasal}")
-        if cat:   parts.append(f"Kategori: {cat}")
-        if sev:   parts.append(f"Severity: {sev}")
-        parts.append("")
-        parts.append(content)
-        out[rid] = "\n".join(parts)
-    return out
-
-REG_LOOKUP = _build_reg_lookup(df_regs)
-
-def _esc(v):
-    if v is None: return ""
-    s = str(v)
-    return (s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
-              .replace('"',"&quot;").replace("\n"," "))
-
-def df_to_html_with_reg_tooltip(df, reg_id_cols=("REG_ID","BI_REG_ID","MATCHING_KEB_ID"),
-                                 max_height=380):
-    """Render DataFrame as HTML; cells in reg_id_cols get title= with full
-    regulation content so users see the rule on hover."""
-    cols = [c for c in df.columns]
-    th = "".join(f"<th>{_esc(c)}</th>" for c in cols)
-    body = []
-    for _, row in df.iterrows():
-        cells = []
-        for c in cols:
-            v = row[c]
-            if pd.isna(v):
-                cells.append("<td></td>"); continue
-            txt = _esc(v)
-            if c in reg_id_cols:
-                key = str(v).strip()
-                tip = REG_LOOKUP.get(key)
-                if tip:
-                    cells.append(
-                        f'<td><span title="{_esc(tip)}" '
-                        f'style="border-bottom:1px dotted #888;cursor:help;color:{ABC_BLUE};font-weight:600;">'
-                        f'{txt}</span></td>'
-                    )
-                else:
-                    cells.append(f"<td>{txt}</td>")
-            else:
-                cells.append(f"<td>{txt}</td>")
-        body.append("<tr>" + "".join(cells) + "</tr>")
-    style = (
-        "<style>"
-        ".reg-tip-table{border-collapse:collapse;width:100%;font-size:13px;}"
-        ".reg-tip-table th,.reg-tip-table td{border:1px solid #e1e8ed;padding:6px 8px;"
-        "text-align:left;vertical-align:top;white-space:normal;}"
-        f".reg-tip-table th{{background:{ABC_BG};color:{ABC_DARK_BLUE};font-weight:700;position:sticky;top:0;}}"
-        ".reg-tip-table tr:nth-child(even){background:#fafbfc;}"
-        "</style>"
-    )
-    return (style +
-            f'<div style="max-height:{max_height}px;overflow:auto;border:1px solid #e1e8ed;border-radius:6px;">'
-            f'<table class="reg-tip-table"><thead><tr>{th}</tr></thead><tbody>'
-            + "".join(body) + "</tbody></table></div>")
 df_uc2 = df_tx[df_tx["REGULATION_SOURCE"] == "KEBIJAKAN_KHUSUS"]
 df_uc3 = df_tx[df_tx["REGULATION_SOURCE"] == "BI_REGULATION"]
 
@@ -287,9 +211,18 @@ def render_violations_table(df_v, severity_col="FINDING_SEVERITY"):
         sub = df_v[df_v[severity_col] == sev]
         if len(sub) == 0: continue
         cls = f"sev-{sev}"
-        st.markdown(f"<div class='findings-block'><span class='{cls}'>● {sev}</span> <b>({len(sub)} findings)</b> · <span style='color:#888;font-size:12px;'>hover REG_ID untuk lihat isi regulasi</span></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='findings-block'><span class='{cls}'>● {sev}</span> <b>({len(sub)} findings)</b></div>", unsafe_allow_html=True)
         cols_show = [c for c in ["TABLE_NAME","COLUMN_NAME","REG_ID","PASAL","REG_CATEGORY","VIOLATION_TYPE","FINDING","RECOMMENDATION"] if c in sub.columns]
-        st.markdown(df_to_html_with_reg_tooltip(sub[cols_show], max_height=380), unsafe_allow_html=True)
+        st.dataframe(
+            sub[cols_show],
+            use_container_width=True,
+            hide_index=True,
+            height=min(40+30*len(sub), 360),
+            column_config={
+                "FINDING": st.column_config.TextColumn("Finding", width="large"),
+                "RECOMMENDATION": st.column_config.TextColumn("💡 Recommendation", width="large"),
+            },
+        )
 
 # ===================================================================
 # MENU 1: SUMMARY
@@ -464,11 +397,8 @@ def render_uc_tabs(df_full, uc_title, uc_subtitle, refresh_label, sp_call,
                     st.markdown(f"<div class='findings-block'><b>Isi Peraturan:</b><br><span style='color:#444'>{rr['CONTENT']}</span></div>", unsafe_allow_html=True)
             df_rv = df_full[(df_full["REG_ID"]==sel_id) & (df_full["IS_VIOLATION"])]
             st.markdown(f"### Violations - {sel_id}")
-            cols_show = [c for c in ["TABLE_NAME","COLUMN_NAME","REG_ID","VIOLATION_TYPE","FINDING_SEVERITY","FINDING","RECOMMENDATION"] if c in df_rv.columns]
-            df_rv_show = df_rv[cols_show].copy()
-            if "REG_ID" not in df_rv_show.columns:
-                df_rv_show.insert(0, "REG_ID", sel_id)
-            st.markdown(df_to_html_with_reg_tooltip(df_rv_show, max_height=420), unsafe_allow_html=True)
+            cols_show = [c for c in ["TABLE_NAME","COLUMN_NAME","VIOLATION_TYPE","FINDING_SEVERITY","FINDING","RECOMMENDATION"] if c in df_rv.columns]
+            st.dataframe(df_rv[cols_show], use_container_width=True, hide_index=True)
 
     # --------- TAB AI CLASSIFICATION ---------
     with t4:
@@ -520,7 +450,7 @@ if selected_menu == MENU_OPTIONS[1]:
         df_uc1,
         "🔐 Use Case 1: UU Perlindungan Data Pribadi vs Data Nasabah",
         "AI memeriksa kolom PII (NIK, NPWP, nama, email, alamat, dll) di tabel customer terhadap UU Perlindungan Data Perbankan.",
-        "UC1", "BTN_COMPLIANCE_AI_DEMO.COMPLIANCE_RESULTS.SP_REFRESH_UC1()",
+        "UC1", "BANK_ABC_COMPLIANCE_AI_DEMO.COMPLIANCE_RESULTS.SP_REFRESH_UC1()",
         tables_in_scope=["NASABAH","REKENING","KARTU_KREDIT","LOAN_APPLICATION"],
     )
     section("Pelanggaran per Cabang Bank ABC")
@@ -547,9 +477,9 @@ if selected_menu == MENU_OPTIONS[2]:
         df_uc2,
         "📋 Use Case 2: Kebijakan Khusus Perusahaan vs Data Transaksi",
         "AI memeriksa apakah 3 tabel transaksi sudah comply dengan Kebijakan Khusus Bank ABC (SKNBI 2022 + Juklak BI-RTGS).",
-        "UC2", "BTN_COMPLIANCE_AI_DEMO.COMPLIANCE_RESULTS.SP_REFRESH_TX_GAP('KEBIJAKAN_KHUSUS')",
+        "UC2", "BANK_ABC_COMPLIANCE_AI_DEMO.COMPLIANCE_RESULTS.SP_REFRESH_TX_GAP('KEBIJAKAN_KHUSUS')",
         tables_in_scope=["TLHIST_TRANSAKSI","GOAML_ODM_TRANSAKSI","RTGS_SKNBI_PAYMENT"],
-        extra_sp_calls=["BTN_COMPLIANCE_AI_DEMO.COMPLIANCE_RESULTS.SP_REFRESH_DATA_COMPLETENESS()"],
+        extra_sp_calls=["BANK_ABC_COMPLIANCE_AI_DEMO.COMPLIANCE_RESULTS.SP_REFRESH_DATA_COMPLETENESS()"],
     )
 
 # ===================================================================
@@ -560,9 +490,9 @@ if selected_menu == MENU_OPTIONS[3]:
         df_uc3,
         "🏛️ Use Case 3: Peraturan Bank Indonesia vs Data Transaksi",
         "AI memeriksa data 3 tabel transaksi terhadap PBI 6/8/2004, PBI 7/18/2005, PADG 08/2024.",
-        "UC3", "BTN_COMPLIANCE_AI_DEMO.COMPLIANCE_RESULTS.SP_REFRESH_TX_GAP('BI_REGULATION')",
+        "UC3", "BANK_ABC_COMPLIANCE_AI_DEMO.COMPLIANCE_RESULTS.SP_REFRESH_TX_GAP('BI_REGULATION')",
         tables_in_scope=["TLHIST_TRANSAKSI","GOAML_ODM_TRANSAKSI","RTGS_SKNBI_PAYMENT"],
-        extra_sp_calls=["BTN_COMPLIANCE_AI_DEMO.COMPLIANCE_RESULTS.SP_REFRESH_DATA_COMPLETENESS()"],
+        extra_sp_calls=["BANK_ABC_COMPLIANCE_AI_DEMO.COMPLIANCE_RESULTS.SP_REFRESH_DATA_COMPLETENESS()"],
     )
 
 # ===================================================================
@@ -571,7 +501,7 @@ if selected_menu == MENU_OPTIONS[3]:
 if selected_menu == MENU_OPTIONS[4]:
     section("⚖️ Use Case 4: Kebijakan Khusus vs Peraturan Bank Indonesia")
     st.markdown("Audit AI mengevaluasi apakah Kebijakan Khusus Bank ABC sudah mencakup seluruh aturan Bank Indonesia.")
-    render_refresh_button("UC4", "BTN_COMPLIANCE_AI_DEMO.COMPLIANCE_RESULTS.SP_REFRESH_UC4()")
+    render_refresh_button("UC4", "BANK_ABC_COMPLIANCE_AI_DEMO.COMPLIANCE_RESULTS.SP_REFRESH_UC4()")
     st.caption("💡 Klik **Refresh UC4** untuk re-run analisis cross-coverage dengan claude-opus-4-7.")
 
     n_total = len(df_uc4)
@@ -605,8 +535,7 @@ if selected_menu == MENU_OPTIONS[4]:
 
     with t2:
         df_gap = df_uc4[df_uc4["COVERAGE_QUALITY"]!="FULL"][["BI_REG_ID","BI_PASAL","BI_CATEGORY","BI_TITLE","BI_SEVERITY","COVERAGE_QUALITY","MATCHING_KEB_ID","GAP_FINDING","RECOMMENDATION"]]
-        st.caption("💡 Hover BI_REG_ID atau MATCHING_KEB_ID untuk melihat isi regulasi lengkap.")
-        st.markdown(df_to_html_with_reg_tooltip(df_gap, max_height=460), unsafe_allow_html=True)
+        st.dataframe(df_gap, use_container_width=True, hide_index=True)
 
     with t3:
         sev_f = st.multiselect("Filter BI Severity:", ["CRITICAL","HIGH","MEDIUM","LOW"], default=["CRITICAL","HIGH"], key="uc4_sev")
@@ -621,9 +550,74 @@ if selected_menu == MENU_OPTIONS[4]:
             unsafe_allow_html=True)
 
 # ===================================================================
-# MENU 6: ADHOC ANALYTICS
+# MENU 6: UC5 - NEGATIVE TEST VALIDATION (partner methodology)
 # ===================================================================
 if selected_menu == MENU_OPTIONS[5]:
+    section("🧪 Use Case 5: Negative Test Validation")
+    st.markdown(
+        "Validasi data transaksi terhadap **15 NEG test cases** yang dirancang oleh partner "
+        "(`RTGS_NegativeTestCase_QA.xlsx` + `RTGS_PasalTraceability_Guide.xlsx`). "
+        "Setiap rule di-translate AI menjadi SQL predicate, lalu dijalankan langsung ke "
+        "tabel transaksi untuk mengukur **berapa baris aktual yang melanggar**."
+    )
+
+    @st.cache_data(ttl=300)
+    def _neg_load():
+        try:
+            return run_query_nocache(f"SELECT * FROM {DB}.COMPLIANCE_RESULTS.NEGATIVE_TEST_FINDINGS ORDER BY VIOLATING_ROWS DESC")
+        except Exception:
+            return pd.DataFrame()
+
+    df_neg = _neg_load()
+    df_neg_v = df_neg[df_neg.get("IS_VIOLATION", False) == True] if len(df_neg) else df_neg
+
+    cc1, cc2, cc3 = st.columns([0.5, 0.25, 0.25])
+    with cc3:
+        if st.button("🔄 Refresh UC5", key="refresh_uc5", type="primary", use_container_width=True):
+            with st.spinner("Re-generate predicates + run tests (claude-opus-4-7)..."):
+                try:
+                    msg1 = call_sp(f"{DB}.COMPLIANCE_RESULTS.SP_RUN_NEGATIVE_TESTS()")
+                    st.success(f"✅ {msg1}")
+                    st.cache_data.clear(); time.sleep(1); st.rerun()
+                except Exception as e:
+                    st.error(f"Refresh gagal: {e}")
+
+    if len(df_neg) == 0:
+        st.warning("Belum ada hasil. Klik Refresh UC5 untuk menjalankan validasi.")
+    else:
+        c1, c2, c3, c4 = st.columns(4)
+        kpi("Total Rules", df_neg["NEG_CODE"].nunique() if len(df_neg) else 0, "15 NEG cases", "blue")
+        with c1: kpi("Total Tests", len(df_neg), "(NEG × table)", "blue")
+        with c2: kpi("Violations", len(df_neg_v), "rule x table dgn isu", "red")
+        with c3: kpi("Critical", int((df_neg_v["FINDING_SEVERITY"]=='CRITICAL').sum()), ">=30% baris bermasalah", "red")
+        with c4: kpi("High", int((df_neg_v["FINDING_SEVERITY"]=='HIGH').sum()), ">=5% baris bermasalah", "gold")
+
+        st.markdown("### 📋 Detailed Findings (per NEG x table)")
+        st.caption("💡 Hover NEG_CODE / PASAL untuk lihat rule lengkap. SAMPLE_TX_IDS adalah baris baris violation aktual.")
+        cols_show = [c for c in ["NEG_CODE","TABLE_NAME","RULE_TITLE","PASAL_REFERENCE","VIOLATING_ROWS","TOTAL_ROWS","VIOLATION_PCT","FINDING_SEVERITY","GENERATED_SQL_PREDICATE","SAMPLE_TX_IDS","RECOMMENDATION"] if c in df_neg.columns]
+        st.dataframe(
+            df_neg[cols_show],
+            use_container_width=True, hide_index=True, height=480,
+            column_config={
+                "VIOLATION_PCT": st.column_config.ProgressColumn(format="%.2f%%", min_value=0, max_value=100),
+                "GENERATED_SQL_PREDICATE": st.column_config.TextColumn("AI-Generated SQL Predicate", width="medium"),
+                "SAMPLE_TX_IDS": st.column_config.TextColumn("Sample TX IDs (10)", width="medium"),
+                "RECOMMENDATION": st.column_config.TextColumn("💡 Recommendation", width="large"),
+            },
+        )
+
+        st.markdown("---")
+        st.markdown("### 📚 Pasal Traceability Reference")
+        try:
+            df_neg_rules = run_query_nocache(f"SELECT * FROM {DB}.COMPLIANCE_DOCS.NEGATIVE_TEST_RULES ORDER BY NEG_CODE")
+            st.dataframe(df_neg_rules, use_container_width=True, hide_index=True, height=400)
+        except Exception:
+            pass
+
+# ===================================================================
+# MENU 7: ADHOC ANALYTICS
+# ===================================================================
+if selected_menu == MENU_OPTIONS[6]:
     section("🔬 Adhoc Compliance Analytics")
     st.markdown("Pilih tabel mana saja di account ini, pilih regulasi, lalu jalankan analisis AI compliance secara on-the-fly dengan **Snowflake Cortex (claude-opus-4-7)**.")
 
